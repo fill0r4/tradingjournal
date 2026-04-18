@@ -317,7 +317,7 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
     <div class="ptitle">Journal</div>
     <div class="fbar">
       <select id="facc" onchange="renderJ()"><option value="">Tutti gli account</option></select>
-      <select id="fa" onchange="renderJ()"><option value="">Tutti gli asset</option><option>BTCUSD</option><option>XAUUSD</option><option>US500</option><option>USOIL</option></select>
+      <select id="fa" onchange="renderJ()"><option value="">Tutti gli asset</option><option>BTCUSD</option><option>ETHUSD</option><option>XAUUSD</option><option>US500</option><option>US30</option><option>USOIL</option></select>
       <select id="fr" onchange="renderJ()"><option value="">Tutti i risultati</option><option>Win</option><option>Loss</option><option>BE</option><option>Aperto</option></select>
       <select id="fh" onchange="renderJ()"><option value="">Casa + Fuori</option><option value="1">Solo casa</option><option value="0">Solo fuori</option></select>
       <select id="ft" onchange="renderJ()"><option value="">Tutti i trigger</option><option>Williams Swing</option><option>Pattern W — var. A</option><option>Pattern W — var. B</option><option>Pattern M — var. A</option><option>Pattern M — var. B</option><option>Three Drives</option><option>Aggressivo + RSI</option></select>
@@ -427,7 +427,7 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
           <div><label class="fl">Asset *</label>
             <select id="f-asset" required>
               <option value="">Seleziona...</option>
-              <option>BTCUSD</option><option>XAUUSD</option><option>US500</option><option>USOIL</option>
+              <option>BTCUSD</option><option>ETHUSD</option><option>XAUUSD</option><option>US500</option><option>US30</option><option>USOIL</option>
             </select>
           </div>
           <div><label class="fl">Direzione *</label>
@@ -1224,9 +1224,25 @@ function P(p){
   document.getElementById('nav-'+p)?.classList.add('active');
   document.getElementById('mobnav-'+p)?.classList.add('active');
   if(p==='dashboard')renderDash();
-  if(p==='journal'){refreshAccountSelects();renderJ();}
-  if(p==='stats'){refreshAccountSelects();renderStats();}
-  if(p==='risk'){refreshAccountSelects();renderRisk();}
+  if(p==='journal'){
+    refreshAccountSelects();
+    // Resetta filtro account a "Tutti" così i trade sono sempre visibili
+    const facc=document.getElementById('facc');
+    if(facc) facc.value='';
+    renderJ();
+  }
+  if(p==='stats'){
+    refreshAccountSelects();
+    const fsa=document.getElementById('fstats-acc');
+    if(fsa) fsa.value='';
+    renderStats();
+  }
+  if(p==='risk'){
+    refreshAccountSelects();
+    const fra=document.getElementById('frisk-acc');
+    if(fra) fra.value='';
+    renderRisk();
+  }
   if(p==='add'&&!editingId){resetForm();refreshAccountSelects();}
   if(p==='settings'){document.getElementById('surl').value=scriptUrl;renderAccountsList();refreshAccountSelects();}
 }
@@ -1630,7 +1646,7 @@ function renderStats() {
   if (!sr.length) { rEl.innerHTML='<div class="empty" style="padding:1rem 0;font-size:12px;">Nessuna violazione.</div>'; }
   else { const mx=sr[0][1]; rEl.innerHTML=sr.map(([r,n])=>`<div class="sbrow"><span class="sblbl" title="${r}">${r.length>20?r.slice(0,18)+'…':r}</span><div class="sbtrack"><div class="sbfill" style="width:${Math.round(n/mx*100)}%;background:var(--re);"></div></div><span class="sbval" style="color:var(--re);">${n}×</span></div>`).join(''); }
 
-  ['rr','dow'].forEach(k => { if(CH[k]) CH[k].destroy(); });
+  ['rr','dow'].forEach(k => { if(CH[k]) { try{CH[k].destroy();}catch(e){} } });
   const cc = chartColors();
   // R medio per setup — espande setup multipli
   const rm = {};
@@ -1643,10 +1659,16 @@ function renderStats() {
     });
   });
   const rl = Object.keys(rm);
-  CH.rr = new Chart(document.getElementById('c-rr'), {type:'bar',data:{labels:rl,datasets:[{data:rl.map(k=>+(rm[k].reduce((a,b)=>a+b,0)/rm[k].length).toFixed(2)),backgroundColor:cc.green,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10}},grid:{display:false}}}}});
+  try {
+    const cRR = document.getElementById('c-rr');
+    if(cRR) CH.rr = new Chart(cRR, {type:'bar',data:{labels:rl,datasets:[{data:rl.map(k=>+(rm[k].reduce((a,b)=>a+b,0)/rm[k].length).toFixed(2)),backgroundColor:cc.green,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10}},grid:{display:false}}}}});
+  } catch(e){ console.warn('Chart rr error:', e); }
   const DAYS=['Dom','Lun','Mar','Mer','Gio','Ven','Sab'], dp=Array(7).fill(0);
   tt.forEach(t => { if(!t.entryTime)return; const r=safeNum(t.totalR); if(r==='')return; dp[new Date(t.entryTime).getDay()]+=r; });
-  CH.dow = new Chart(document.getElementById('c-dow'), {type:'bar',data:{labels:DAYS,datasets:[{data:dp.map(v=>+v.toFixed(2)),backgroundColor:dp.map(v=>v>=0?cc.green:cc.red),borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{grid:{color:cc.grid}},x:{grid:{display:false}}}}});
+  try {
+    const cDow = document.getElementById('c-dow');
+    if(cDow) CH.dow = new Chart(cDow, {type:'bar',data:{labels:DAYS,datasets:[{data:dp.map(v=>+v.toFixed(2)),backgroundColor:dp.map(v=>v>=0?cc.green:cc.red),borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{grid:{color:cc.grid}},x:{grid:{display:false}}}}});
+  } catch(e){ console.warn('Chart dow error:', e); }
 }
 
 function chartColors() {
@@ -1694,14 +1716,14 @@ function renderDash(){
       <td class="${rCls(t.totalR)}" style="font-weight:700;">${rStr(t.totalR)}</td>
       <td><span class="bdg ${RC[t.result]||'bopen'}">${t.result}</span></td>
     </tr>`).join('')+'</tbody></table></div>';
-  if(CH.pnl)CH.pnl.destroy();if(CH.setup)CH.setup.destroy();
+  if(CH.pnl){try{CH.pnl.destroy();}catch(e){}} if(CH.setup){try{CH.setup.destroy();}catch(e){}}
   const cc=chartColors();
   const rev=[...trades].reverse(),pd=[];let cum=0;
   rev.forEach(t=>{const r=safeNum(t.totalR);cum+=r!==''?r:0;pd.push(+cum.toFixed(3));});
-  CH.pnl=new Chart(document.getElementById('c-pnl'),{type:'line',data:{labels:pd.map((_,i)=>i+1),datasets:[{data:pd,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.35,pointRadius:pd.length<40?3:0,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{grid:{color:cc.grid}},x:{ticks:{maxTicksLimit:8},grid:{display:false}}}}});
+  try{const el=document.getElementById('c-pnl');if(el)CH.pnl=new Chart(el,{type:'line',data:{labels:pd.map((_,i)=>i+1),datasets:[{data:pd,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.35,pointRadius:pd.length<40?3:0,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{grid:{color:cc.grid}},x:{ticks:{maxTicksLimit:8},grid:{display:false}}}}});}catch(e){console.warn('Chart pnl:',e);}
   const sm={};trades.forEach(t=>{if(!t.setup||!['Win','Loss'].includes(t.result))return;if(!sm[t.setup])sm[t.setup]={w:0,l:0};if(t.result==='Win')sm[t.setup].w++;else sm[t.setup].l++;});
   const sl=Object.keys(sm);
-  CH.setup=new Chart(document.getElementById('c-setup'),{type:'bar',data:{labels:sl,datasets:[{data:sl.map(k=>sm[k].w+sm[k].l?Math.round(sm[k].w/(sm[k].w+sm[k].l)*100):0),backgroundColor:cc.bar,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{max:100,ticks:{callback:v=>v+'%'}},x:{ticks:{font:{size:10}},grid:{display:false}}}}});
+  try{const el=document.getElementById('c-setup');if(el)CH.setup=new Chart(el,{type:'bar',data:{labels:sl,datasets:[{data:sl.map(k=>sm[k].w+sm[k].l?Math.round(sm[k].w/(sm[k].w+sm[k].l)*100):0),backgroundColor:cc.bar,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{max:100,ticks:{callback:v=>v+'%'}},x:{ticks:{font:{size:10}},grid:{display:false}}}}});}catch(e){console.warn('Chart setup:',e);}
 }
 
 function renderRisk() {
@@ -1847,24 +1869,27 @@ function renderRisk() {
   `;
 
   // Equity chart + drawdown info
-  if(CH.equity) CH.equity.destroy();
+  if(CH.equity){try{CH.equity.destroy();}catch(e){}}
   const cc = chartColors();
   const ddArr = [];
   let pk=0;
   eq.forEach(v => { if(v>pk)pk=v; ddArr.push(+(pk-v).toFixed(3)); });
-  CH.equity = new Chart(document.getElementById('c-equity'), {
-    type:'line',
-    data:{
-      labels:eq.map((_,i)=>i),
-      datasets:[
-        {label:'Equity (R)',data:eq,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.3,pointRadius:eq.length<50?2:0,borderWidth:2,yAxisID:'y'},
-        {label:'Drawdown (R)',data:ddArr.map(v=>-v),borderColor:cc.red,backgroundColor:'transparent',fill:false,tension:.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3],yAxisID:'y'}
-      ]
-    },
-    options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:true,labels:{font:{size:10},color:'var(--tx2)'}},tooltip:{mode:'index',intersect:false}},
-      scales:{y:{grid:{color:cc.grid},ticks:{callback:v=>v+'R'}},x:{display:false}}}
-  });
+  try{
+    const el=document.getElementById('c-equity');
+    if(el) CH.equity = new Chart(el, {
+      type:'line',
+      data:{
+        labels:eq.map((_,i)=>i),
+        datasets:[
+          {label:'Equity (R)',data:eq,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.3,pointRadius:eq.length<50?2:0,borderWidth:2,yAxisID:'y'},
+          {label:'Drawdown (R)',data:ddArr.map(v=>-v),borderColor:cc.red,backgroundColor:'transparent',fill:false,tension:.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3],yAxisID:'y'}
+        ]
+      },
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:true,labels:{font:{size:10},color:'var(--tx2)'}},tooltip:{mode:'index',intersect:false}},
+        scales:{y:{grid:{color:cc.grid},ticks:{callback:v=>v+'R'}},x:{display:false}}}
+    });
+  }catch(e){console.warn('Chart equity:',e);}
   document.getElementById('risk-dd').innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
       <div class="mc"><div class="mc-l">Max Drawdown</div><div class="mc-v neg">-${maxDD.toFixed(2)}R</div><div class="mc-s">dalla curva equity</div></div>
