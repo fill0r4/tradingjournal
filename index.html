@@ -63,22 +63,53 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 
 /* ── LAYOUT MOBILE ── */
 .mob-topbar{display:none;background:var(--surf);border-bottom:.5px solid var(--b1);
-  padding:11px 1rem;align-items:center;justify-content:space-between;
+  padding:0 1rem;height:52px;align-items:center;justify-content:space-between;
   position:sticky;top:0;z-index:50;}
 .mob-bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;
   background:var(--surf);border-top:.5px solid var(--b1);z-index:50;
-  display:none;flex-direction:row;height:var(--nav-h);}
+  flex-direction:row;height:var(--nav-h);}
 .mob-tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:3px;font-size:10px;color:var(--tx3);cursor:pointer;border:none;background:none;
-  padding:6px 4px;transition:color .15s;}
+  gap:2px;font-size:9px;color:var(--tx3);cursor:pointer;border:none;background:none;
+  padding:4px 2px;transition:color .15s;min-width:0;}
 .mob-tab.active{color:var(--pu);}
-.mob-tab .icon{font-size:20px;line-height:1;}
+.mob-tab .icon{font-size:18px;line-height:1;}
 
 @media(max-width:720px){
   .sidebar{display:none;}
   .mob-topbar{display:flex;}
   .mob-bottom-nav{display:flex;}
-  .main{padding:1rem;padding-bottom:calc(var(--nav-h) + 1rem);}
+  .main{padding:.75rem;padding-bottom:calc(var(--nav-h) + .75rem);}
+  .ptitle{font-size:17px;margin-bottom:1rem;}
+  /* Cards più compatte */
+  .card{padding:.85rem 1rem;}
+  /* Metrics grid: 2 colonne su mobile */
+  .mgrid{grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:1rem;}
+  .mc{padding:10px 12px;}
+  .mc-v{font-size:18px;}
+  /* crow: stack verticale */
+  .crow{grid-template-columns:1fr;gap:.75rem;}
+  /* Modal full screen su mobile */
+  .mbg{padding:.5rem;}
+  .mdl{padding:1rem;margin-top:0;border-radius:var(--r-md);}
+  .dgrid{grid-template-columns:1fr 1fr;}
+  /* Table: font più piccolo */
+  .tt{font-size:11px;}
+  .tt td,.tt th{padding:6px 5px;}
+  /* Fbar: wrap più stretto */
+  .fbar{gap:6px;}
+  .fbar select{font-size:12px;padding:7px 8px;}
+  /* Form grids tutti 1 colonna */
+  .fg{grid-template-columns:1fr;}
+  .fg3{grid-template-columns:1fr 1fr;}
+  /* Chips più compatte */
+  .chip{padding:6px 11px;font-size:12px;}
+  /* Bottoni */
+  .bgrp{gap:6px;}
+  .btn{padding:10px 14px;font-size:13px;}
+  /* Stat bars label più corta */
+  .sblbl{width:90px;}
+  /* Risk page grid 2 col */
+  #risk-metrics-grid{grid-template-columns:repeat(2,1fr);}
 }
 
 /* ── MAIN ── */
@@ -616,14 +647,6 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
       </div>
       <div id="sst" style="margin-top:12px;font-size:13px;"></div>
     </div>
-    <div class="card">
-      <div class="ctitle">Risk management</div>
-      <div style="font-size:13px;color:var(--tx2);line-height:1.9;">
-        <strong>Risk:</strong> 0.5% per operazione — 22 tentativi<br>
-        <strong>In trend — C1:</strong> RR1 | <strong>C2:</strong> OLP setup | <strong>C3:</strong> trailing su minimi/massimi TF operativo<br>
-        <strong>Controtrend/range — C1:</strong> RR1 | <strong>C2:</strong> RR2 | <strong>C3:</strong> OLP discrezionale
-      </div>
-    </div>
   </div>
 </main>
 </div>
@@ -1055,6 +1078,18 @@ function setSync(state,txt) {
   document.getElementById('stxt').textContent=txt;
   document.getElementById('stxt-mob').textContent=txt;
 }
+function saveAccounts() {
+  localStorage.setItem('tj_accounts', JSON.stringify(accounts));
+  pushAccounts(); // sincronizza su Sheets
+}
+
+async function pushAccounts() {
+  if(!scriptUrl) return;
+  try {
+    await fetch(scriptUrl, {method:'POST', body:JSON.stringify({action:'saveConfig', key:'accounts', value:JSON.stringify(accounts)})});
+  } catch(e) { console.error('pushAccounts:', e); }
+}
+
 async function syncNow() {
   if(!scriptUrl){setSync('err','URL non configurato');P('settings');return;}
   if(syncing)return;
@@ -1064,6 +1099,18 @@ async function syncNow() {
     const d=await r.json();
     if(d.error)throw new Error(d.error);
     trades=(d.trades||[]).map(sanitize);
+    // Carica account da Sheets se presenti
+    if(d.config && d.config.accounts){
+      try{
+        const remote=JSON.parse(d.config.accounts);
+        if(Array.isArray(remote)&&remote.length){
+          accounts=remote;
+          localStorage.setItem('tj_accounts',JSON.stringify(accounts));
+          refreshAccountSelects();
+          renderAccountsList();
+        }
+      }catch(e){}
+    }
     save(false);dirty=false;updateBanner();
     setSync('ok','Sync '+new Date().toLocaleTimeString('it'));
     renderDash();renderJ();
