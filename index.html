@@ -321,6 +321,14 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
       <select id="fr" onchange="renderJ()"><option value="">Tutti i risultati</option><option>Win</option><option>Loss</option><option>BE</option><option>Aperto</option></select>
       <select id="fh" onchange="renderJ()"><option value="">Casa + Fuori</option><option value="1">Solo casa</option><option value="0">Solo fuori</option></select>
       <select id="ft" onchange="renderJ()"><option value="">Tutti i trigger</option><option>Williams Swing</option><option>Pattern W — var. A</option><option>Pattern W — var. B</option><option>Pattern M — var. A</option><option>Pattern M — var. B</option><option>Three Drives</option><option>Aggressivo + RSI</option></select>
+      <select id="fsort" onchange="renderJ()">
+        <option value="date-desc">↓ Data (recenti)</option>
+        <option value="date-asc">↑ Data (vecchi)</option>
+        <option value="asset">Asset A→Z</option>
+        <option value="result">Risultato</option>
+        <option value="totalr-desc">↓ Tot R</option>
+        <option value="totalr-asc">↑ Tot R</option>
+      </select>
       <button class="btn btn-p btn-sm" onclick="P('add')">＋ Nuovo</button>
     </div>
     <div class="card" style="padding:0 0 .5rem;">
@@ -634,6 +642,10 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
       <div style="display:flex;gap:8px;align-items:center;">
         <input type="text" id="new-account-name" placeholder="Nome account (es. Breve periodo)" style="flex:1;">
         <button class="btn btn-p btn-sm" onclick="addAccount()">+ Aggiungi</button>
+      </div>
+      <div style="margin-top:10px;">
+        <button class="btn btn-s btn-sm" onclick="forcePushAccounts()" style="font-size:12px;">↑ Salva account su Sheets</button>
+        <span id="acc-push-status" style="font-size:12px;color:var(--tx3);margin-left:8px;"></span>
       </div>
     </div>
     <div class="card">
@@ -988,21 +1000,23 @@ function addAccount() {
   if (!name) return;
   if (accounts.find(a => a.name === name)) { alert('Account già esistente.'); return; }
   accounts.push({ id: Date.now().toString(), name });
-  saveAccounts();
+  saveAccounts(); // include push a Sheets
   inp.value = '';
   renderAccountsList();
   refreshAccountSelects();
+  renderDash(); renderJ(); // re-render immediato
 }
 
 function deleteAccount(id) {
   const acc = accounts.find(a => a.id === id);
   if (!acc) return;
   const used = trades.filter(t => t.account === acc.name).length;
-  if (used > 0 && !confirm(`L'account "${acc.name}" è usato da ${used} trade. Eliminarlo comunque? I trade non vengono cancellati.`)) return;
+  if (used > 0 && !confirm(`L'account "${acc.name}" è usato da ${used} trade. Eliminarlo comunque?`)) return;
   accounts = accounts.filter(a => a.id !== id);
   saveAccounts();
   renderAccountsList();
   refreshAccountSelects();
+  renderDash(); renderJ();
 }
 
 function renameAccount(id) {
@@ -1086,32 +1100,43 @@ async function pushAccounts() {
   } catch(e) { console.error('pushAccounts:', e); }
 }
 
+async function forcePushAccounts() {
+  const st = document.getElementById('acc-push-status');
+  if(!scriptUrl){ if(st) st.textContent='⚠ URL non configurato'; return; }
+  if(st) st.textContent='Salvataggio...';
+  try {
+    const r = await fetch(scriptUrl, {method:'POST', body:JSON.stringify({action:'saveConfig', key:'accounts', value:JSON.stringify(accounts)})});
+    const d = await r.json();
+    if(d.ok) { if(st) st.textContent='✓ Salvati '+accounts.length+' account'; }
+    else { if(st) st.textContent='✗ '+JSON.stringify(d); }
+  } catch(e) {
+    if(st) st.textContent='✗ '+e.message;
+    console.error('forcePushAccounts:', e);
+  }
+}
+
 async function syncNow() {
   if(!scriptUrl){setSync('err','URL non configurato');P('settings');return;}
   if(syncing)return;
   syncing=true;setSync('spin','Sync...');
   try{
     const r=await fetch(scriptUrl+'?action=getAll');
-    const d=await r.json();
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const text=await r.text();
+    let d;try{d=JSON.parse(text);}catch(e){throw new Error('Risposta non valida dal server');}
     if(d.error)throw new Error(d.error);
     trades=(d.trades||[]).map(sanitize);
-    // Carica account da Sheets — sovrascrive sempre il locale se la config esiste
-    if(d.config && d.config.accounts !== undefined){
-      try{
-        const remote=JSON.parse(d.config.accounts);
-        if(Array.isArray(remote)){
-          accounts=remote;
-          localStorage.setItem('tj_accounts',JSON.stringify(accounts));
-        }
-      }catch(e){}
-    }
+    applyRemoteAccounts(d.config);
     save(false);dirty=false;updateBanner();
     setSync('ok','Sync '+new Date().toLocaleTimeString('it'));
-    // Re-render tutto dopo sync, inclusi gli account selects
-    refreshAccountSelects();
-    renderAccountsList();
-    renderDash();renderJ();
-  }catch(e){setSync('err','Errore sync');console.error(e);}
+    refreshAccountSelects();renderAccountsList();
+    // Re-render pagina attiva
+    const pid=(document.querySelector('.page.active')||{}).id||'page-dashboard';
+    renderDash();
+    if(pid==='page-journal') renderJ();
+    if(pid==='page-stats')   renderStats();
+    if(pid==='page-risk')    renderRisk();
+  }catch(e){setSync('err',e.message.slice(0,40));console.error('syncNow:',e);}
   syncing=false;
 }
 async function pushTrade(t) {
@@ -1186,13 +1211,13 @@ function recalcAll(){
   document.getElementById('f-totalr').value=calcTotalR(r1,r2,r3)!==''?calcTotalR(r1,r2,r3):'';
   // Auto check RR rules — solo se non è una Loss
   const result=document.getElementById('f-res').value;
-  const isLoss=result==='Loss';
+  const skipRR=result==='Loss'||result==='BE';
   const cb1=document.getElementById('rule_r_rr1');
-  if(cb1&&r1!==''&&!isLoss){const ok=r1>=0.95;cb1.checked=ok;cb1.closest('.rrow').classList.toggle('auto-viol',!ok);}
-  else if(cb1&&isLoss){cb1.checked=true;cb1.closest('.rrow').classList.remove('auto-viol');}
+  if(cb1&&r1!==''&&!skipRR){const ok=r1>=0.95;cb1.checked=ok;cb1.closest('.rrow').classList.toggle('auto-viol',!ok);}
+  else if(cb1&&skipRR){cb1.checked=true;cb1.closest('.rrow').classList.remove('auto-viol');}
   const cb2=document.getElementById('rule_r_rr2');
-  if(cb2&&r2!==''&&!isLoss){const ok=r2>=1.95;cb2.checked=ok;cb2.closest('.rrow').classList.toggle('auto-viol',!ok);}
-  else if(cb2&&isLoss){cb2.checked=true;cb2.closest('.rrow').classList.remove('auto-viol');}
+  if(cb2&&r2!==''&&!skipRR){const ok=r2>=1.95;cb2.checked=ok;cb2.closest('.rrow').classList.toggle('auto-viol',!ok);}
+  else if(cb2&&skipRR){cb2.checked=true;cb2.closest('.rrow').classList.remove('auto-viol');}
 }
 
 // ─────────────────────────────────────────────
@@ -1204,12 +1229,53 @@ async function saveSettings(){
   const st=document.getElementById('sst');
   st.textContent='Test...';st.style.color='var(--am)';
   try{
-    const r=await fetch(url+'?action=getAll');const d=await r.json();
+    const r=await fetch(url+'?action=getAll');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const text=await r.text();
+    let d;try{d=JSON.parse(text);}catch(e){throw new Error('Risposta non valida');}
     if(d.error)throw new Error(d.error);
-    trades=(d.trades||[]).map(sanitize);save(false);dirty=false;updateBanner();
-    st.textContent='✓ Connesso. '+trades.length+' trade trovati.';st.style.color='var(--gr)';
-    setSync('ok','Connesso');P('dashboard');
+    trades=(d.trades||[]).map(sanitize);
+    save(false);dirty=false;updateBanner();
+    applyRemoteAccounts(d.config);
+    const accInfo=accounts.length?accounts.map(a=>a.name).join(', '):'nessuno';
+    st.textContent='✓ Connesso. '+trades.length+' trade. Account: '+accInfo;
+    st.style.color='var(--gr)';
+    setSync('ok','Connesso');
+    // Re-render tutto subito
+    refreshAccountSelects();renderAccountsList();
+    renderDash();
   }catch(e){st.textContent='✗ '+e.message;st.style.color='var(--re)';setSync('err','Errore');}
+}
+
+// Applica gli account remoti se presenti e non vuoti.
+// Se Sheets non ha account ma ne abbiamo in locale, li pusha.
+function applyRemoteAccounts(config) {
+  if(!config) {
+    // Nessuna config da Sheets — pusha quelli locali se esistono
+    if(accounts.length > 0) pushAccounts();
+    return;
+  }
+  if(config.accounts === undefined || config.accounts === '') {
+    // Config esiste ma non ha accounts — pusha quelli locali
+    if(accounts.length > 0) pushAccounts();
+    return;
+  }
+  try {
+    const remote = JSON.parse(config.accounts);
+    if(Array.isArray(remote) && remote.length > 0) {
+      // Sheets ha account → li usa
+      accounts = remote;
+      localStorage.setItem('tj_accounts', JSON.stringify(accounts));
+      refreshAccountSelects();
+      renderAccountsList();
+    } else {
+      // Sheets ha array vuoto → usa locali e li pusha
+      if(accounts.length > 0) pushAccounts();
+    }
+  } catch(e) {
+    console.warn('applyRemoteAccounts parse error:', e);
+    if(accounts.length > 0) pushAccounts();
+  }
 }
 function clearLocal(){if(confirm('Cancella cache locale?')){trades=[];save(false);renderDash();}}
 
@@ -1339,13 +1405,15 @@ async function saveTrade(e){
   });
   if(editingId){const i=trades.findIndex(x=>x.id===editingId);if(i>=0)trades[i]=t;}
   else trades.unshift(t);
-  save();await pushTrade(t);
+  save();
   btn.textContent=editingId?'Aggiorna trade':'Salva trade';btn.disabled=false;
   editingId=null;
-  // Imposta il filtro account sul trade appena salvato così compare subito
+  pushTrade(t); // fire and forget
+  // Vai su journal e mostra tutti i trade (reset filtro account)
   const jAcc=document.getElementById('facc');
-  if(jAcc&&t.account) jAcc.value=t.account;
+  if(jAcc) jAcc.value='';
   P('journal');
+  renderDash();
 }
 
 function resetForm(){
@@ -1370,11 +1438,14 @@ function resetForm(){
 
 async function deleteTrade(){
   if(!editingId||!confirm('Eliminare?'))return;
-  trades=trades.filter(t=>t.id!==editingId);save();await pushDelete(editingId);
+  trades=trades.filter(t=>t.id!==editingId);
+  save();
+  pushDelete(editingId); // fire and forget
   editingId=null;
   const jAcc=document.getElementById('facc');
   if(jAcc) jAcc.value='';
   P('journal');
+  renderDash();
 }
 
 // ─────────────────────────────────────────────
@@ -1383,44 +1454,6 @@ async function deleteTrade(){
 function rStr(v){if(v===''||v===null||v===undefined)return'—';const n=Number(v);return isFinite(n)?(n>0?'+':'')+n.toFixed(2)+'R':'—';}
 function rCls(v){const n=Number(v);return isFinite(n)&&n>0?'pp':isFinite(n)&&n<0?'pn':'';}
 
-function renderJ(){
-  const fAcc=document.getElementById('facc').value;
-  const fA=document.getElementById('fa').value;
-  const fR=document.getElementById('fr').value;
-  const fH=document.getElementById('fh').value;
-  const fT=document.getElementById('ft').value;
-  const f=trades.filter(t=>
-    (!fAcc||t.account===fAcc)&&
-    (!fA||t.asset===fA)&&(!fR||t.result===fR)&&
-    (fH===''||(fH==='1'?t.atHome:!t.atHome))&&
-    (!fT||t.trigger===fT)
-  );
-  const tb=document.getElementById('jbody'),em=document.getElementById('jempty');
-  if(!f.length){tb.innerHTML='';em.style.display='';return;}
-  em.style.display='none';
-  const RC={Win:'bw',Loss:'bloss',BE:'bbe',Aperto:'bopen'};
-  tb.innerHTML=f.map(t=>{
-    const nv=t.violatedRules?.length||0;
-    const trendLabel = t.trend ? ({rialzista:'📈 Rialz.',ribassista:'📉 Ribass.',range:'↔️ Range'}[t.trend]||t.trend) : '—';
-    const sc = trendLabel;
-    return`<tr onclick="viewTrade('${t.id}')">
-      <td style="font-size:11px;white-space:nowrap;">${t.entryTime?t.entryTime.slice(0,16).replace('T',' '):'—'}</td>
-      <td style="font-size:11px;font-weight:500;">${t.account||'—'}</td>
-      <td><strong>${t.asset}</strong></td>
-      <td><span class="bdg ${t.direction==='Long'?'bl':'bs'}">${t.direction}</span></td>
-      <td style="font-size:11px;color:var(--tx2);" title="${t.scenario||''}">${sc}</td>
-      <td style="font-size:11px;">${(Array.isArray(t.setups)&&t.setups.length?t.setups:[t.setup||'—']).join(' + ')}</td>
-      <td style="font-size:11px;color:var(--tx2);">${t.trigger||'—'}</td>
-      <td><span class="bdg ${t.atHome?'bhome':'baway'}">${t.atHome?'🏠':'🚶'}</span></td>
-      <td class="${rCls(t.exit1R)}">${rStr(t.exit1R)}</td>
-      <td class="${rCls(t.exit2R)}">${rStr(t.exit2R)}</td>
-      <td class="${rCls(t.exit3R)}">${rStr(t.exit3R)}</td>
-      <td class="${rCls(t.totalR)}" style="font-weight:700;">${rStr(t.totalR)}</td>
-      <td><span class="bdg ${RC[t.result]||'bopen'}">${t.result}</span></td>
-      <td>${nv?`<span class="bdg bviol">⚠${nv}</span>`:''}</td>
-    </tr>`;
-  }).join('');
-}
 
 // ─────────────────────────────────────────────
 // MODAL
@@ -1571,6 +1604,8 @@ function calcStats(subset){
   return{total:tt.length,closed:cl,wins:w.length,losses:l.length,totalPnl,avgW,avgL,wr,pf,exp,vt};
 }
 function makeWRBars(groupFn, id, subset) {
+  const el = document.getElementById(id);
+  if(!el) return;
   const tt = subset || trades;
   const map = {};
   tt.forEach(t => {
@@ -1579,7 +1614,7 @@ function makeWRBars(groupFn, id, subset) {
     const r = safeNum(t.totalR); map[k].pnl += r!=='' ? r : 0;
     if (t.result==='Win') map[k].w++; if (t.result==='Loss') map[k].l++;
   });
-  const el = document.getElementById(id), keys = Object.keys(map);
+  const keys = Object.keys(map);
   if (!keys.length) { el.innerHTML='<div class="empty" style="padding:1rem 0;font-size:12px;">Nessun dato.</div>'; return; }
   el.innerHTML = keys.map(k => {
     const tot=map[k].w+map[k].l, wr=tot?Math.round(map[k].w/tot*100):0, pnl=map[k].pnl;
@@ -1593,6 +1628,64 @@ function makeWRBars(groupFn, id, subset) {
 }
 
 function renderStats() {
+  try { _renderStats(); } catch(e) {
+    console.error('renderStats:', e);
+    const el = document.getElementById('stats-m');
+    if(el) el.innerHTML = '<div style="color:var(--re);font-size:13px;padding:8px 0;">⚠ '+e.message+'</div>';
+  }
+}
+
+function renderJ(){
+  const fAcc=document.getElementById('facc')?.value||'';
+  const fA=document.getElementById('fa')?.value||'';
+  const fR=document.getElementById('fr')?.value||'';
+  const fH=document.getElementById('fh')?.value||'';
+  const fT=document.getElementById('ft')?.value||'';
+  const fS=document.getElementById('fsort')?.value||'date-desc';
+  let f=trades.filter(t=>
+    (!fAcc||t.account===fAcc)&&
+    (!fA||t.asset===fA)&&(!fR||t.result===fR)&&
+    (fH===''||(fH==='1'?t.atHome:!t.atHome))&&
+    (!fT||t.trigger===fT)
+  );
+  // Sort
+  f=[...f].sort((a,b)=>{
+    if(fS==='date-asc')  return (a.entryTime||'').localeCompare(b.entryTime||'');
+    if(fS==='date-desc') return (b.entryTime||'').localeCompare(a.entryTime||'');
+    if(fS==='asset')     return (a.asset||'').localeCompare(b.asset||'');
+    if(fS==='result'){const o={Win:0,BE:1,Loss:2,Aperto:3};return (o[a.result]??9)-(o[b.result]??9);}
+    if(fS==='totalr-desc'){const ra=safeNum(a.totalR),rb=safeNum(b.totalR);return (rb===''?-99:rb)-(ra===''?-99:ra);}
+    if(fS==='totalr-asc') {const ra=safeNum(a.totalR),rb=safeNum(b.totalR);return (ra===''?99:ra)-(rb===''?99:rb);}
+    return 0;
+  });
+  const tb=document.getElementById('jbody'),em=document.getElementById('jempty');
+  if(!tb)return;
+  if(!f.length){tb.innerHTML='';em.style.display='';return;}
+  em.style.display='none';
+  const RC={Win:'bw',Loss:'bloss',BE:'bbe',Aperto:'bopen'};
+  tb.innerHTML=f.map(t=>{
+    const nv=t.violatedRules?.length||0;
+    const trendLabel=t.trend?({rialzista:'📈 Rialz.',ribassista:'📉 Ribass.',range:'↔️ Range'}[t.trend]||t.trend):'—';
+    return`<tr onclick="viewTrade('${t.id}')">
+      <td style="font-size:11px;white-space:nowrap;">${t.entryTime?t.entryTime.slice(0,16).replace('T',' '):'—'}</td>
+      <td style="font-size:11px;font-weight:500;">${t.account||'—'}</td>
+      <td><strong>${t.asset}</strong></td>
+      <td><span class="bdg ${t.direction==='Long'?'bl':'bs'}">${t.direction}</span></td>
+      <td style="font-size:11px;color:var(--tx2);" title="${t.scenario||''}">${trendLabel}</td>
+      <td style="font-size:11px;">${(Array.isArray(t.setups)&&t.setups.length?t.setups:[t.setup||'—']).join(' + ')}</td>
+      <td style="font-size:11px;color:var(--tx2);">${t.trigger||'—'}</td>
+      <td><span class="bdg ${t.atHome?'bhome':'baway'}">${t.atHome?'🏠':'🚶'}</span></td>
+      <td class="${rCls(t.exit1R)}">${rStr(t.exit1R)}</td>
+      <td class="${rCls(t.exit2R)}">${rStr(t.exit2R)}</td>
+      <td class="${rCls(t.exit3R)}">${rStr(t.exit3R)}</td>
+      <td class="${rCls(t.totalR)}" style="font-weight:700;">${rStr(t.totalR)}</td>
+      <td><span class="bdg ${RC[t.result]||'bopen'}">${t.result}</span></td>
+      <td>${nv?`<span class="bdg bviol">⚠${nv}</span>`:''}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _renderStats() {
   // Filtro account
   const fAcc = document.getElementById('fstats-acc')?.value || '';
   const tt = fAcc ? trades.filter(t => t.account === fAcc) : trades;
@@ -1727,9 +1820,17 @@ function renderDash(){
 }
 
 function renderRisk() {
+  try { _renderRisk(); } catch(e) {
+    console.error('renderRisk error:', e);
+    const el = document.getElementById('risk-metrics-grid');
+    if(el) el.innerHTML = '<div style="color:var(--re);font-size:13px;padding:8px 0;">⚠ Errore nel calcolo: '+e.message+'</div>';
+  }
+}
+
+function _renderRisk() {
   const fAcc = document.getElementById('frisk-acc')?.value || '';
   const tt = (fAcc ? trades.filter(t => t.account === fAcc) : trades)
-    .filter(t => t.result === 'Win' || t.result === 'Loss'); // solo trade chiusi
+    .filter(t => t.result === 'Win' || t.result === 'Loss');
 
   const wins  = tt.filter(t => t.result === 'Win');
   const losses = tt.filter(t => t.result === 'Loss');
@@ -1881,12 +1982,12 @@ function renderRisk() {
       data:{
         labels:eq.map((_,i)=>i),
         datasets:[
-          {label:'Equity (R)',data:eq,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.3,pointRadius:eq.length<50?2:0,borderWidth:2,yAxisID:'y'},
-          {label:'Drawdown (R)',data:ddArr.map(v=>-v),borderColor:cc.red,backgroundColor:'transparent',fill:false,tension:.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3],yAxisID:'y'}
+          {label:'Equity (R)',data:eq,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.3,pointRadius:eq.length<50?2:0,borderWidth:2},
+          {label:'Drawdown (R)',data:ddArr.map(v=>-v),borderColor:cc.red,backgroundColor:'transparent',fill:false,tension:.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}
         ]
       },
       options:{responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:true,labels:{font:{size:10},color:'var(--tx2)'}},tooltip:{mode:'index',intersect:false}},
+        plugins:{legend:{display:true,labels:{font:{size:10}}},tooltip:{mode:'index',intersect:false}},
         scales:{y:{grid:{color:cc.grid},ticks:{callback:v=>v+'R'}},x:{display:false}}}
     });
   }catch(e){console.warn('Chart equity:',e);}
