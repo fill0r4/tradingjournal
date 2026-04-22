@@ -1131,13 +1131,16 @@ async function syncNow() {
     const r=await fetch(scriptUrl+'?action=getAll');
     if(!r.ok)throw new Error('HTTP '+r.status);
     const text=await r.text();
-    let d;try{d=JSON.parse(text);}catch(e){throw new Error('Risposta non valida dal server');}
+    let d;try{d=JSON.parse(text);}catch(e){throw new Error('Risposta non valida');}
     if(d.error)throw new Error(d.error);
     trades=(d.trades||[]).map(sanitize);
-    applyRemoteAccounts(d.config);
+    applyRemoteAccounts(d.config);  // aggiorna accounts[]
     save(false);dirty=false;updateBanner();
-    setSync('ok','Sync '+new Date().toLocaleTimeString('it'));
-    refreshAccountSelects();renderAccountsList();
+    // Sempre: aggiorna tutti i select con gli account aggiornati
+    refreshAccountSelects();
+    renderAccountsList();
+    const accMsg = accounts.length ? ' · '+accounts.length+' acc' : '';
+    setSync('ok','Sync '+new Date().toLocaleTimeString('it')+accMsg);
     // Re-render pagina attiva
     const pid=(document.querySelector('.page.active')||{}).id||'page-dashboard';
     renderDash();
@@ -1245,12 +1248,12 @@ async function saveSettings(){
     trades=(d.trades||[]).map(sanitize);
     save(false);dirty=false;updateBanner();
     applyRemoteAccounts(d.config);
+    refreshAccountSelects();
+    renderAccountsList();
     const accInfo=accounts.length?accounts.map(a=>a.name).join(', '):'nessuno';
     st.textContent='✓ Connesso. '+trades.length+' trade. Account: '+accInfo;
     st.style.color='var(--gr)';
     setSync('ok','Connesso');
-    // Re-render tutto subito
-    refreshAccountSelects();renderAccountsList();
     renderDash();
   }catch(e){st.textContent='✗ '+e.message;st.style.color='var(--re)';setSync('err','Errore');}
 }
@@ -1258,32 +1261,16 @@ async function saveSettings(){
 // Applica gli account remoti se presenti e non vuoti.
 // Se Sheets non ha account ma ne abbiamo in locale, li pusha.
 function applyRemoteAccounts(config) {
-  if(!config) {
-    // Nessuna config da Sheets — pusha quelli locali se esistono
-    if(accounts.length > 0) pushAccounts();
-    return;
-  }
-  if(config.accounts === undefined || config.accounts === '') {
-    // Config esiste ma non ha accounts — pusha quelli locali
-    if(accounts.length > 0) pushAccounts();
-    return;
-  }
+  if(!config) return;
+  const raw = config.accounts;
+  if(!raw) return;
   try {
-    const remote = JSON.parse(config.accounts);
+    const remote = JSON.parse(raw);
     if(Array.isArray(remote) && remote.length > 0) {
-      // Sheets ha account → li usa
       accounts = remote;
       localStorage.setItem('tj_accounts', JSON.stringify(accounts));
-      refreshAccountSelects();
-      renderAccountsList();
-    } else {
-      // Sheets ha array vuoto → usa locali e li pusha
-      if(accounts.length > 0) pushAccounts();
     }
-  } catch(e) {
-    console.warn('applyRemoteAccounts parse error:', e);
-    if(accounts.length > 0) pushAccounts();
-  }
+  } catch(e) { console.warn('applyRemoteAccounts:', e); }
 }
 function clearLocal(){if(confirm('Cancella cache locale?')){trades=[];save(false);renderDash();}}
 
@@ -1604,16 +1591,18 @@ function loadForm(id){
 function calcStats(subset){
   const tt = subset || trades;
   const w=tt.filter(t=>t.result==='Win'),l=tt.filter(t=>t.result==='Loss');
-  const cl=w.length+l.length;
+  const be=tt.filter(t=>t.result==='BE');
+  const cl=w.length+l.length+be.length; // BE conta come chiuso
   const sumR=arr=>arr.reduce((s,t)=>s+(safeNum(t.totalR)||0),0);
   const totalPnl=sumR(tt.filter(t=>safeNum(t.totalR)!==''));
   const avgW=w.length?sumR(w)/w.length:0,avgL=l.length?Math.abs(sumR(l)/l.length):0;
-  const wr=cl?w.length/cl*100:0;
+  const wlCl=w.length+l.length; // win rate solo su Win/Loss (BE neutro)
+  const wr=wlCl?w.length/wlCl*100:0;
   const gw=sumR(w),gl=Math.abs(sumR(l));
   const pf=gl>0?gw/gl:gw>0?99:0;
-  const exp=cl?(wr/100*avgW)-((1-wr/100)*avgL):0;
+  const exp=wlCl?(wr/100*avgW)-((1-wr/100)*avgL):0;
   const vt=tt.filter(t=>t.violatedRules?.length>0).length;
-  return{total:tt.length,closed:cl,wins:w.length,losses:l.length,totalPnl,avgW,avgL,wr,pf,exp,vt};
+  return{total:tt.length,closed:cl,wins:w.length,losses:l.length,be:be.length,totalPnl,avgW,avgL,wr,pf,exp,vt};
 }
 function makeWRBars(groupFn, id, subset) {
   const el = document.getElementById(id);
@@ -1705,7 +1694,7 @@ function _renderStats() {
   const s = calcStats(tt);
   document.getElementById('stats-m').innerHTML = `
     <div class="mc"><div class="mc-l">Totale trade</div><div class="mc-v">${s.total}</div><div class="mc-s">${s.closed} chiusi</div></div>
-    <div class="mc"><div class="mc-l">Accuracy</div><div class="mc-v ${s.wr>=50?'pos':'neg'}">${s.wr.toFixed(1)}%</div><div class="mc-s">${s.wins}W / ${s.losses}L</div></div>
+    <div class="mc"><div class="mc-l">Accuracy</div><div class="mc-v ${s.wr>=50?'pos':'neg'}">${s.wr.toFixed(1)}%</div><div class="mc-s">${s.wins}W / ${s.losses}L / ${s.be}BE</div></div>
     <div class="mc"><div class="mc-l">Expectancy</div><div class="mc-v ${s.exp>=0?'pos':'neg'}">${s.exp>0?'+':''}${s.exp.toFixed(2)}R</div><div class="mc-s">per trade</div></div>
     <div class="mc"><div class="mc-l">Avg Win</div><div class="mc-v pos">+${s.avgW.toFixed(2)}R</div></div>
     <div class="mc"><div class="mc-l">Avg Loss</div><div class="mc-v neg">-${s.avgL.toFixed(2)}R</div></div>
@@ -1724,7 +1713,7 @@ function _renderStats() {
         return `<div class="mc" style="border-left:3px solid var(--pu);">
           <div class="mc-l">${a.name}</div>
           <div class="mc-v ${as.totalPnl>=0?'pos':'neg'}">${as.totalPnl>0?'+':''}${as.totalPnl.toFixed(2)}R</div>
-          <div class="mc-s">${as.wins}W/${as.losses}L · ${as.wr.toFixed(0)}% acc · exp ${as.exp>0?'+':''}${as.exp.toFixed(2)}R · ${as.total} trade</div>
+          <div class="mc-s">${as.wins}W/${as.losses}L/${as.be||0}BE · ${as.wr.toFixed(0)}% acc · exp ${as.exp>0?'+':''}${as.exp.toFixed(2)}R · ${as.total} trade</div>
         </div>`;
       }).join('') + `</div>`;
   } else { accEl.innerHTML = ''; }
@@ -1796,7 +1785,7 @@ function renderDash(){
   const s=calcStats();
   document.getElementById('dash-m').innerHTML=`
     <div class="mc"><div class="mc-l">Totale trade</div><div class="mc-v">${s.total}</div><div class="mc-s">${s.closed} chiusi</div></div>
-    <div class="mc"><div class="mc-l">Accuracy</div><div class="mc-v ${s.wr>=50?'pos':'neg'}">${s.wr.toFixed(1)}%</div><div class="mc-s">${s.wins}W / ${s.losses}L</div></div>
+    <div class="mc"><div class="mc-l">Accuracy</div><div class="mc-v ${s.wr>=50?'pos':'neg'}">${s.wr.toFixed(1)}%</div><div class="mc-s">${s.wins}W / ${s.losses}L / ${s.be}BE</div></div>
     <div class="mc"><div class="mc-l">Expectancy</div><div class="mc-v ${s.exp>=0?'pos':'neg'}">${s.exp>0?'+':''}${s.exp.toFixed(2)}R</div><div class="mc-s">per trade</div></div>
     <div class="mc"><div class="mc-l">Avg Win</div><div class="mc-v pos">+${s.avgW.toFixed(2)}R</div></div>
     <div class="mc"><div class="mc-l">Avg Loss</div><div class="mc-v neg">-${s.avgL.toFixed(2)}R</div></div>
@@ -2076,10 +2065,10 @@ document.getElementById('theme-btn').textContent =
   savedTheme === 'dark' ? '☀️ Tema chiaro' : savedTheme === 'light' ? '🌙 Tema scuro' : '🖥 Tema sistema';
 refreshAccountSelects();
 renderAccountsList();
-if(scriptUrl){setSync('spin','Connessione...');syncNow();}
-else updateBanner();
 buildRules();
 renderDash();
+if(scriptUrl){ setSync('spin','Connessione...'); syncNow(); }
+else updateBanner();
 </script>
 </body>
 </html>
