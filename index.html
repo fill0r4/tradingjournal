@@ -1369,10 +1369,14 @@ async function saveTrade(e){
   const setups=getSelectedSetups();
   const setup=setups[0]||'';
   const trig=document.getElementById('f-trig').value;
+  const result=document.getElementById('f-res').value||'Aperto';
+  const skipRR=result==='Loss'||result==='BE';
   const activeTags=getActiveTags(dir,setup,trig);
   const violated=[];
   RULES.forEach(rule=>{
     if(!rule.tags.some(t=>activeTags.has(t)))return;
+    // RR1/RR2 non si violano su Loss e BE
+    if(skipRR&&(rule.id==='r_rr1'||rule.id==='r_rr2'))return;
     const cb=document.getElementById('rule_'+rule.id);
     if(cb&&!cb.checked)violated.push(rule.text);
   });
@@ -1407,7 +1411,7 @@ async function saveTrade(e){
     exit3Time:document.getElementById('f-x3t').value,
     exit3Price:safeNum(document.getElementById('f-x3p').value),exit3R:r3,
     totalR:calcTotalR(r1,r2,r3),
-    result:document.getElementById('f-res').value||'Aperto',
+    result,
     notes:document.getElementById('f-notes').value,
     emotion:selEmo,violatedRules:violated
   });
