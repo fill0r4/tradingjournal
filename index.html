@@ -1134,7 +1134,12 @@ async function syncNow() {
     let d;try{d=JSON.parse(text);}catch(e){throw new Error('Risposta non valida');}
     if(d.error)throw new Error(d.error);
     trades=(d.trades||[]).map(sanitize);
-    applyRemoteAccounts(d.config);  // aggiorna accounts[]
+    applyRemoteAccounts(d.config);
+    // Se non ci sono account remoti ma ne abbiamo in localStorage, li recupera e pusha
+    if(accounts.length === 0) {
+      const localAcc = JSON.parse(localStorage.getItem('tj_accounts')||'[]');
+      if(localAcc.length > 0) { accounts = localAcc; pushAccounts(); }
+    }
     save(false);dirty=false;updateBanner();
     // Sempre: aggiorna tutti i select con gli account aggiornati
     refreshAccountSelects();
@@ -1248,10 +1253,21 @@ async function saveSettings(){
     trades=(d.trades||[]).map(sanitize);
     save(false);dirty=false;updateBanner();
     applyRemoteAccounts(d.config);
+    // Se dopo il caricamento non ci sono account remoti ma ne abbiamo in locale, li pusho
+    if(accounts.length === 0) {
+      const localAcc = JSON.parse(localStorage.getItem('tj_accounts')||'[]');
+      if(localAcc.length > 0) {
+        accounts = localAcc;
+        pushAccounts(); // salva su Sheets
+      }
+    }
     refreshAccountSelects();
     renderAccountsList();
-    const accInfo=accounts.length?accounts.map(a=>a.name).join(', '):'nessuno';
-    st.textContent='✓ Connesso. '+trades.length+' trade. Account: '+accInfo;
+    // Mostra info dettagliate inclusa config raw per debug
+    const configRaw = d.config ? JSON.stringify(d.config) : 'null';
+    const accInfo = accounts.length ? accounts.map(a=>a.name).join(', ') : 'nessuno';
+    st.innerHTML = '✓ Connesso. '+trades.length+' trade. Account: <strong>'+accInfo+'</strong>'
+      +'<br><span style="font-size:10px;color:var(--tx3);">Config raw: '+configRaw.slice(0,200)+'</span>';
     st.style.color='var(--gr)';
     setSync('ok','Connesso');
     renderDash();
