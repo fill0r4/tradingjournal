@@ -561,6 +561,11 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
         <div class="fg">
           <div><label class="fl">Entry price *</label><input type="number" step="any" id="f-ep" placeholder="es. 2380.50" oninput="recalcAll()" required></div>
           <div><label class="fl">Stop Loss *</label><input type="number" step="any" id="f-sl" placeholder="es. 2370.00" oninput="recalcAll()" required></div>
+          <div><label class="fl">Lotto per contratto</label><input type="number" step="any" id="f-lot" placeholder="es. 1.17" oninput="recalcAll()" min="0"></div>
+        </div>
+        <!-- Commissione calcolata (solo per asset con commissione) -->
+        <div id="comm-wrap" style="display:none;margin-top:6px;padding:8px 12px;background:var(--surf2);border-radius:var(--r-md);font-size:12px;color:var(--tx2);">
+          <span id="comm-label"></span>
         </div>
 
         <!-- ATR check -->
@@ -1187,19 +1192,48 @@ function safeDT(v){
   }catch(e){return'';}
 }
 function sanitize(t){
+  const ep=safeNum(t.entryPrice), sl=safeNum(t.slPrice);
+  // calcola commR al volo se non salvato (trade vecchi)
+  const storedComm=safeNum(t.commR);
+  const commR = storedComm!=='' ? storedComm : calcCommissionR(t.asset, ep, sl);
   return{...t,
-    entryPrice:safeNum(t.entryPrice),slPrice:safeNum(t.slPrice),
+    entryPrice:ep, slPrice:sl,
     exit1Price:safeNum(t.exit1Price),exit1R:safeNum(t.exit1R),
     exit2Price:safeNum(t.exit2Price),exit2R:safeNum(t.exit2R),
     exit3Price:safeNum(t.exit3Price),exit3R:safeNum(t.exit3R),
     olpPrice:safeNum(t.olpPrice),totalR:safeNum(t.totalR),
-    // normalizza tutti i campi datetime
+    lot:safeNum(t.lot),
+    commR,
     entryTime:safeDT(t.entryTime),
     exit1Time:safeDT(t.exit1Time),
     exit2Time:safeDT(t.exit2Time),
     exit3Time:safeDT(t.exit3Time),
   };
 }
+// Commissioni per asset (% sul nozionale, round-trip = ×2)
+const COMM_RATE = { BTCUSD: 0.00065, ETHUSD: 0.00065, XAUUSD: 0.0000014 };
+// XAUUSD: 0.0014% = 0.000014 ma il rate è % quindi 0.0014/100 = 0.000014
+// Corretto: 0.0014% → 0.0014/100 = 0.000014; 0.065% → 0.065/100 = 0.00065
+
+function commRate(asset) {
+  if(asset==='BTCUSD'||asset==='ETHUSD') return 0.065/100;
+  if(asset==='XAUUSD') return 0.0014/100;
+  return 0;
+}
+
+// Calcola commissione in R per un trade
+// commR = (entryPrice × commRate × 2) / |entry - SL|
+// Il ×2 è round-trip (apertura + chiusura), il lotto si semplifica
+function calcCommissionR(asset, ep, sl) {
+  const rate = commRate(asset);
+  if(!rate) return 0;
+  const e = safeNum(ep), s = safeNum(sl);
+  if(e===''||s==='') return 0;
+  const risk = Math.abs(e - s);
+  if(risk === 0) return 0;
+  return +(e * rate * 2 / risk).toFixed(4);
+}
+
 function calcR(ep,sl,xp,dir){
   const e=safeNum(ep),s=safeNum(sl),x=safeNum(xp);
   if(e===''||s===''||x==='')return'';
@@ -1217,6 +1251,7 @@ function recalcAll(){
   const ep=document.getElementById('f-ep').value;
   const sl=document.getElementById('f-sl').value;
   const dir=document.getElementById('f-dir').value;
+  const asset=document.getElementById('f-asset').value;
   const r1=calcR(ep,sl,document.getElementById('f-x1p').value,dir);
   const r2=calcR(ep,sl,document.getElementById('f-x2p').value,dir);
   const r3=calcR(ep,sl,document.getElementById('f-x3p').value,dir);
@@ -1224,8 +1259,24 @@ function recalcAll(){
     const rv=[r1,r2,r3][i];
     document.getElementById('f-'+x+'r').value=rv!==''?rv:'';
   });
-  document.getElementById('f-totalr').value=calcTotalR(r1,r2,r3)!==''?calcTotalR(r1,r2,r3):'';
-  // Auto check RR rules — solo se non è una Loss
+  const totalR = calcTotalR(r1,r2,r3);
+  document.getElementById('f-totalr').value=totalR!==''?totalR:'';
+
+  // Commissione in R
+  const commR = calcCommissionR(asset, ep, sl);
+  const commWrap = document.getElementById('comm-wrap');
+  const commLabel = document.getElementById('comm-label');
+  if(commR > 0 && ep && sl) {
+    const netR = totalR!=='' ? +(totalR - commR).toFixed(3) : null;
+    const rate = commRate(asset)*100;
+    commWrap.style.display = '';
+    commLabel.innerHTML = `⚡ Commissione (${rate}% × 2 round-trip): <strong>-${commR.toFixed(4)}R</strong> per contratto`
+      + (netR!==null ? ` &nbsp;·&nbsp; R netto: <strong class="${netR>=0?'pos':'neg'}">${netR>0?'+':''}${netR}R</strong>` : '');
+  } else {
+    commWrap.style.display = 'none';
+  }
+
+  // Auto check RR rules
   const result=document.getElementById('f-res').value;
   const skipRR=result==='Loss'||result==='BE';
   const cb1=document.getElementById('rule_r_rr1');
@@ -1406,6 +1457,10 @@ async function saveTrade(e){
     pf034:document.getElementById('f-pf034').value,
     atrCheck:document.getElementById('f-atr').value,
     atHome:document.getElementById('f-home').value==='1',
+    lot:safeNum(document.getElementById('f-lot').value),
+    commR:calcCommissionR(document.getElementById('f-asset').value,
+           document.getElementById('f-ep').value,
+           document.getElementById('f-sl').value),
     entryPrice:ep,slPrice:sl,
     exit1Time:document.getElementById('f-x1t').value,
     exit1Price:safeNum(document.getElementById('f-x1p').value),exit1R:r1,
@@ -1440,6 +1495,8 @@ function resetForm(){
   document.getElementById('hbtn-home').className='btn btn-s';
   document.getElementById('hbtn-away').className='btn btn-s';
   document.getElementById('f-home').value='';
+  document.getElementById('f-lot').value='';
+  document.getElementById('comm-wrap').style.display='none';
   document.getElementById('pf-type-wrap').style.display='none';
   document.getElementById('pf034-wrap').style.display='none';
   document.getElementById('f-pf034').value='';
@@ -1485,7 +1542,10 @@ function viewTrade(id){
          ['PF type',t.pfType||'—'],['PF 0-3-4',t.pf034||'—'],['ATR check',t.atrCheck||'—'],['Dove',t.atHome?'🏠 Casa':'🚶 Fuori'],
          ['Entry price',t.entryPrice||'—'],['Stop Loss',t.slPrice||'—'],
          ['1R',risk?risk.toFixed(4)+' pt':'—'],
-         ['Risultato',t.result],['Total R',rStr(t.totalR)]
+         ['Lotto',t.lot||'—'],
+         ['Commissione',t.commR?(-(t.commR)).toFixed(4)+'R per contratto':'—'],
+         ['R netto',(t.commR&&t.totalR!==''&&t.totalR!==undefined)?(+(safeNum(t.totalR)-t.commR).toFixed(3))+'R':'—'],
+         ['Risultato',t.result],['Total R (lordo)',rStr(t.totalR)]
         ].map(([k,v])=>`<div class="dc"><div class="dk">${k}</div><div class="dv">${v}</div></div>`).join('')}
     </div>
     <div class="exit-detail">
@@ -1525,6 +1585,7 @@ function loadForm(id){
   document.getElementById('f-pf-type').value = t.pfType||'';
   document.getElementById('f-ep').value    = t.entryPrice!==''?t.entryPrice:'';
   document.getElementById('f-sl').value    = t.slPrice!==''?t.slPrice:'';
+  document.getElementById('f-lot').value   = t.lot!==''&&t.lot!==undefined?t.lot:'';
   document.getElementById('f-x1t').value   = fmtDT(t.exit1Time);
   document.getElementById('f-x1p').value   = t.exit1Price!==''?t.exit1Price:'';
   document.getElementById('f-x2t').value   = fmtDT(t.exit2Time);
