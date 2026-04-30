@@ -1105,6 +1105,8 @@ function refreshAccountSelects() {
     dAcc.innerHTML = '<option value="">Tutti gli account</option>' +
       accounts.map(a => `<option value="${a.name}"${a.name===cur?' selected':''}>${a.name}</option>`).join('');
   }
+  // Filtro Risk
+  const rAcc = document.getElementById('frisk-acc');
   if (rAcc) {
     const cur = rAcc.value;
     rAcc.innerHTML = '<option value="">Tutti gli account</option>' +
