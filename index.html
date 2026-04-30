@@ -310,6 +310,11 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
   <div id="page-dashboard" class="page active">
     <div class="ptitle">Dashboard</div>
     <div id="setup-prompt"></div>
+    <div class="fbar" style="margin-bottom:1rem;">
+      <select id="fdash-acc" onchange="renderDash()" style="font-size:13px;padding:8px 12px;">
+        <option value="">Tutti gli account</option>
+      </select>
+    </div>
     <div class="mgrid" id="dash-m"></div>
     <div class="crow">
       <div class="card"><div class="ctitle">P&L cumulativo (R)</div><div style="position:relative;height:180px;"><canvas id="c-pnl"></canvas></div></div>
@@ -885,7 +890,7 @@ const RULES = [
 
   // ── GESTIONE ──────────────────────────────
   { id:'r_rr1',         text:'C1 chiuso a RR1 (≥ 0.95R)',                        cat:'Gestione',  auto:true,   tags:['always'] },
-  { id:'r_rr2',         text:'C2 chiuso a RR2 in controtrend/range (≥ 1.95R)',   cat:'Gestione',  auto:true,   tags:['controtrend','range'] },
+  { id:'r_1trade',      text:'Limite 1 trade al giorno rispettato',               cat:'Gestione',  auto:true,   tags:['always'] },
 ];
 
 function getActiveTags(dir, setup, trig) {
@@ -985,6 +990,21 @@ function onFormChange() {
 
   buildRules(dir, setup, trig, violatedIds);
   recalcAll();
+
+  // Auto-check regola 1 trade al giorno
+  const entryDate = (document.getElementById('f-et').value||'').slice(0,10);
+  if(entryDate) {
+    const sameDay = trades.filter(t =>
+      t.id !== editingId &&
+      (t.entryTime||'').slice(0,10) === entryDate
+    );
+    const cb1t = document.getElementById('rule_r_1trade');
+    if(cb1t) {
+      const ok = sameDay.length === 0;
+      cb1t.checked = ok;
+      cb1t.closest('.rrow').classList.toggle('auto-viol', !ok);
+    }
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -1078,8 +1098,13 @@ function refreshAccountSelects() {
     jAcc.innerHTML = '<option value="">Tutti gli account</option>' +
       accounts.map(a => `<option value="${a.name}"${a.name===cur?' selected':''}>${a.name}</option>`).join('');
   }
-  // Filtro Risk
-  const rAcc = document.getElementById('frisk-acc');
+  // Filtro Dashboard
+  const dAcc = document.getElementById('fdash-acc');
+  if (dAcc) {
+    const cur = dAcc.value;
+    dAcc.innerHTML = '<option value="">Tutti gli account</option>' +
+      accounts.map(a => `<option value="${a.name}"${a.name===cur?' selected':''}>${a.name}</option>`).join('');
+  }
   if (rAcc) {
     const cur = rAcc.value;
     rAcc.innerHTML = '<option value="">Tutti gli account</option>' +
@@ -1276,15 +1301,12 @@ function recalcAll(){
     commWrap.style.display = 'none';
   }
 
-  // Auto check RR rules
+  // Auto check RR1 — solo se non è Loss o BE
   const result=document.getElementById('f-res').value;
   const skipRR=result==='Loss'||result==='BE';
   const cb1=document.getElementById('rule_r_rr1');
   if(cb1&&r1!==''&&!skipRR){const ok=r1>=0.95;cb1.checked=ok;cb1.closest('.rrow').classList.toggle('auto-viol',!ok);}
   else if(cb1&&skipRR){cb1.checked=true;cb1.closest('.rrow').classList.remove('auto-viol');}
-  const cb2=document.getElementById('rule_r_rr2');
-  if(cb2&&r2!==''&&!skipRR){const ok=r2>=1.95;cb2.checked=ok;cb2.closest('.rrow').classList.toggle('auto-viol',!ok);}
-  else if(cb2&&skipRR){cb2.checked=true;cb2.closest('.rrow').classList.remove('auto-viol');}
 }
 
 // ─────────────────────────────────────────────
@@ -1351,7 +1373,7 @@ function P(p){
   document.getElementById('page-'+p).classList.add('active');
   document.getElementById('nav-'+p)?.classList.add('active');
   document.getElementById('mobnav-'+p)?.classList.add('active');
-  if(p==='dashboard')renderDash();
+  if(p==='dashboard'){refreshAccountSelects();renderDash();}
   if(p==='journal'){
     refreshAccountSelects();
     // Resetta filtro account a "Tutti" così i trade sono sempre visibili
@@ -1429,8 +1451,8 @@ async function saveTrade(e){
   const violated=[];
   RULES.forEach(rule=>{
     if(!rule.tags.some(t=>activeTags.has(t)))return;
-    // RR1/RR2 non si violano su Loss e BE
-    if(skipRR&&(rule.id==='r_rr1'||rule.id==='r_rr2'))return;
+    // RR1 non si viola su Loss e BE; 1trade è auto-gestita
+    if(skipRR&&rule.id==='r_rr1')return;
     const cb=document.getElementById('rule_'+rule.id);
     if(cb&&!cb.checked)violated.push(rule.text);
   });
@@ -1859,7 +1881,11 @@ function chartColors() {
 function renderDash(){
   document.getElementById('setup-prompt').innerHTML=!scriptUrl
     ?`<div class="setup-ban"><h3>Setup richiesto</h3><p>Vai su <strong>⚙ Impostazioni</strong> per connettere Google Sheets.</p><button class="btn btn-p btn-sm" onclick="P('settings')">Configura</button></div>`:'';
-  const s=calcStats();
+  const fAcc = document.getElementById('fdash-acc')?.value || '';
+  const tt = fAcc ? trades.filter(t => t.account === fAcc) : trades;
+  const accTitle = fAcc ? ` — ${fAcc}` : '';
+  document.querySelector('#page-dashboard .ptitle').textContent = 'Dashboard' + accTitle;
+  const s=calcStats(tt);
   document.getElementById('dash-m').innerHTML=`
     <div class="mc"><div class="mc-l">Totale trade</div><div class="mc-v">${s.total}</div><div class="mc-s">${s.closed} chiusi</div></div>
     <div class="mc"><div class="mc-l">Accuracy</div><div class="mc-v ${s.wr>=50?'pos':'neg'}">${s.wr.toFixed(1)}%</div><div class="mc-s">${s.wins}W / ${s.losses}L / ${s.be}BE</div></div>
@@ -1870,7 +1896,7 @@ function renderDash(){
     <div class="mc"><div class="mc-l">Profit factor</div><div class="mc-v ${s.pf>=1?'pos':'neg'}">${s.pf.toFixed(2)}</div></div>
     <div class="mc"><div class="mc-l">Trade violati</div><div class="mc-v ${s.vt>0?'neg':'pos'}">${s.vt}</div></div>
   `;
-  const rec=trades.slice(0,10);
+  const rec=tt.slice(0,10);
   const RC={Win:'bw',Loss:'bloss',BE:'bbe',Aperto:'bopen'};
   document.getElementById('dash-rec').innerHTML=!rec.length
     ?'<div class="empty">Nessun trade. <a onclick="P(\'add\')">Aggiungi →</a></div>'
@@ -1879,7 +1905,7 @@ function renderDash(){
       <td style="font-size:11px;">${t.entryTime?t.entryTime.slice(0,10):'—'}</td>
       <td><strong>${t.asset}</strong></td>
       <td><span class="bdg ${t.direction==='Long'?'bl':'bs'}">${t.direction}</span></td>
-      <td style="font-size:11px;">${t.setup||'—'}</td>
+      <td style="font-size:11px;">${(Array.isArray(t.setups)&&t.setups.length?t.setups:[t.setup||'—']).join(' + ')}</td>
       <td style="font-size:11px;color:var(--tx2);">${t.trigger||'—'}</td>
       <td class="${rCls(t.exit1R)}">${rStr(t.exit1R)}</td>
       <td class="${rCls(t.exit2R)}">${rStr(t.exit2R)}</td>
@@ -1889,10 +1915,10 @@ function renderDash(){
     </tr>`).join('')+'</tbody></table></div>';
   if(CH.pnl){try{CH.pnl.destroy();}catch(e){}} if(CH.setup){try{CH.setup.destroy();}catch(e){}}
   const cc=chartColors();
-  const rev=[...trades].reverse(),pd=[];let cum=0;
+  const rev=[...tt].reverse(),pd=[];let cum=0;
   rev.forEach(t=>{const r=safeNum(t.totalR);cum+=r!==''?r:0;pd.push(+cum.toFixed(3));});
   try{const el=document.getElementById('c-pnl');if(el)CH.pnl=new Chart(el,{type:'line',data:{labels:pd.map((_,i)=>i+1),datasets:[{data:pd,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.35,pointRadius:pd.length<40?3:0,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{grid:{color:cc.grid}},x:{ticks:{maxTicksLimit:8},grid:{display:false}}}}});}catch(e){console.warn('Chart pnl:',e);}
-  const sm={};trades.forEach(t=>{if(!t.setup||!['Win','Loss'].includes(t.result))return;if(!sm[t.setup])sm[t.setup]={w:0,l:0};if(t.result==='Win')sm[t.setup].w++;else sm[t.setup].l++;});
+  const sm={};tt.forEach(t=>{if(!t.setup||!['Win','Loss'].includes(t.result))return;if(!sm[t.setup])sm[t.setup]={w:0,l:0};if(t.result==='Win')sm[t.setup].w++;else sm[t.setup].l++;});
   const sl=Object.keys(sm);
   try{const el=document.getElementById('c-setup');if(el)CH.setup=new Chart(el,{type:'bar',data:{labels:sl,datasets:[{data:sl.map(k=>sm[k].w+sm[k].l?Math.round(sm[k].w/(sm[k].w+sm[k].l)*100):0),backgroundColor:cc.bar,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{max:100,ticks:{callback:v=>v+'%'}},x:{ticks:{font:{size:10}},grid:{display:false}}}}});}catch(e){console.warn('Chart setup:',e);}
 }
