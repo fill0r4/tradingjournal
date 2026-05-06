@@ -116,6 +116,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
   .sblbl{width:90px;}
   /* Risk page grid 2 col */
   #risk-metrics-grid{grid-template-columns:repeat(2,1fr);}
+  /* Prop calc: stack su mobile */
+  #prop-calc-grid{grid-template-columns:1fr !important;}
 }
 
 /* ── MAIN ── */
@@ -403,15 +405,45 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
       <div id="risk-streak" style="margin-top:8px;"></div>
     </div>
 
-    <!-- Risk of Ruin + Kelly -->
-    <div class="crow">
-      <div class="card">
-        <div class="ctitle">Risk of Ruin</div>
-        <div id="risk-ruin" style="margin-top:8px;"></div>
-      </div>
-      <div class="card">
-        <div class="ctitle">Kelly Criterion</div>
-        <div id="risk-kelly" style="margin-top:8px;"></div>
+    <!-- Prop Firm Risk Calculator -->
+    <div class="card">
+      <div class="ctitle">Prop Firm — Calcolatore Rischio per 1R</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:14px;" id="prop-calc-grid">
+
+        <!-- Inputs -->
+        <div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px;">Parametri Prop Firm</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <label class="fl" style="margin-top:0;font-size:12px;">Max Drawdown consentito dalla Prop (%)</label>
+              <input type="number" id="prop-dd" value="10" min="1" max="50" step="0.5" oninput="calcPropRisk()" style="width:100%;">
+            </div>
+            <div>
+              <label class="fl" style="margin-top:0;font-size:12px;">Moltiplicatore di sicurezza (stress test)</label>
+              <input type="number" id="prop-mult" value="1.5" min="1" max="5" step="0.1" oninput="calcPropRisk()" style="width:100%;">
+              <div style="font-size:11px;color:var(--tx3);margin-top:3px;">1.5 = sopravvivi a un DD 1.5× peggiore del tuo storico</div>
+            </div>
+            <div>
+              <label class="fl" style="margin-top:0;font-size:12px;">Capitale del conto (opzionale)</label>
+              <div style="display:flex;gap:6px;">
+                <input type="number" id="prop-cap" value="" min="0" step="1000" oninput="calcPropRisk()" placeholder="es. 100000" style="flex:1;">
+                <select id="prop-currency" onchange="calcPropRisk()" style="width:60px;font-size:12px;">
+                  <option>€</option><option>$</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Output -->
+        <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;background:var(--surf2);border-radius:var(--r-lg);padding:1.5rem;">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:8px;">Rischio consigliato per 1R</div>
+          <div id="prop-result-pct" style="font-size:48px;font-weight:700;line-height:1;">—</div>
+          <div id="prop-result-abs" style="font-size:16px;font-weight:500;margin-top:6px;color:var(--tx2);"></div>
+          <div id="prop-result-badge" style="margin-top:12px;font-size:12px;padding:6px 12px;border-radius:20px;"></div>
+          <div id="prop-sample-warn" style="margin-top:10px;font-size:12px;color:var(--tx3);line-height:1.5;max-width:260px;"></div>
+        </div>
+
       </div>
     </div>
 
@@ -1941,6 +1973,9 @@ function _renderRisk() {
   const wins  = tt.filter(t => t.result === 'Win');
   const losses = tt.filter(t => t.result === 'Loss');
   const n = tt.length, w = wins.length, l = losses.length;
+  // Tutti i trade chiusi inclusi BE (per threshold significatività)
+  const allClosed = (fAcc ? trades.filter(t => t.account === fAcc) : trades)
+    .filter(t => ['Win','Loss','BE'].includes(t.result)).length;
 
   const sumR = arr => arr.reduce((s,t) => s + (safeNum(t.totalR)||0), 0);
   const avgW = w ? sumR(wins)/w   : 0;
@@ -1979,41 +2014,12 @@ function _renderRisk() {
     if(dd>maxDD){maxDD=dd;}
   });
 
-  // ── Risk of Ruin ────────────────────────────────────
-  // Formula semplificata: RoR = ((1-acc)/acc)^(R/avgW)
-  // con R = ruin threshold in R (usiamo 10R come default = 20 trade a -0.5R)
-  // Fonte: Ralph Vince "Portfolio Management Formulas"
-  // Usiamo la formula: RoR = ((1-p)/p)^N dove N = ruin_threshold/avgW
-  const ruinThreshold = 10; // R (equivale a perdere 10R di equity)
-  let ror = 0;
-  if(avgW>0 && avgL>0 && acc>0 && acc<1) {
-    // Adjusted win probability usando il rapporto W/L
-    const ratio = avgW/avgL; // win/loss ratio
-    // RoR = ((1-acc*ratio) / acc*ratio)^(ruin/avgW)  — approx di Vince
-    const q = 1-acc;
-    const p = acc;
-    if(p*ratio > q) { // sistema positivo
-      ror = Math.pow(q/(p*ratio), ruinThreshold/avgW) * 100;
-    } else {
-      ror = 100; // sistema negativo → ruin certa
-    }
-    ror = Math.min(ror, 100);
-  } else if(n===0) { ror = null; }
-
-  // ── Kelly ───────────────────────────────────────────
-  // Kelly% = (p*b - q) / b  dove b = avgW/avgL (odds), p=acc, q=1-acc
-  let kelly = null;
-  if(avgL>0 && n>0) {
-    const b = avgW/avgL;
-    kelly = ((acc*b - (1-acc)) / b) * 100;
-  }
-  // Half-Kelly consigliato in pratica
-  const halfKelly = kelly !== null ? kelly/2 : null;
 
   // ── RENDER ──────────────────────────────────────────
   if(n===0){
-    ['risk-metrics-grid','risk-streak','risk-ruin','risk-kelly','risk-dd','risk-glossary']
+    ['risk-metrics-grid','risk-streak','risk-dd','risk-glossary']
       .forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML='<div class="empty" style="padding:8px 0;font-size:12px;">Nessun trade chiuso.</div>'; });
+    calcPropRisk(0, 0, allClosed);
     return;
   }
 
@@ -2024,7 +2030,7 @@ function _renderRisk() {
     <div class="mc"><div class="mc-l">Expectancy</div><div class="mc-v ${exp>=0?'pos':'neg'}">${exp>0?'+':''}${exp.toFixed(3)}R</div><div class="mc-s">per trade</div></div>
     <div class="mc"><div class="mc-l">Avg Win</div><div class="mc-v pos">+${avgW.toFixed(3)}R</div></div>
     <div class="mc"><div class="mc-l">Avg Loss</div><div class="mc-v neg">-${avgL.toFixed(3)}R</div></div>
-    <div class="mc"><div class="mc-l">Rapporto W/L</div><div class="mc-v ${avgW/avgL>=1?'pos':'neg'}">${avgL>0?(avgW/avgL).toFixed(2):'—'}</div><div class="mc-s">avg win / avg loss</div></div>
+    <div class="mc"><div class="mc-l">Rapporto W/L</div><div class="mc-v ${avgL>0&&avgW/avgL>=1?'pos':'neg'}">${avgL>0?(avgW/avgL).toFixed(2):'—'}</div><div class="mc-s">avg win / avg loss</div></div>
     <div class="mc"><div class="mc-l">Max Drawdown</div><div class="mc-v neg">-${maxDD.toFixed(2)}R</div></div>
     <div class="mc"><div class="mc-l">P&L totale</div><div class="mc-v ${equity>=0?'pos':'neg'}">${equity>0?'+':''}${equity.toFixed(2)}R</div></div>
   `;
@@ -2034,48 +2040,16 @@ function _renderRisk() {
   const streakLabel = curStreakType==='Win'?'📈 Win streak':'📉 Loss streak';
   document.getElementById('risk-streak').innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
-      <div class="mc"><div class="mc-l">Max Win Streak</div><div class="mc-v pos">${maxW}</div><div class="mc-s">trade consecutivi Win</div></div>
-      <div class="mc"><div class="mc-l">Max Loss Streak</div><div class="mc-v neg">${maxL}</div><div class="mc-s">trade consecutivi Loss</div></div>
-      <div class="mc"><div class="mc-l">Streak corrente</div><div class="mc-v ${streakCls}">${curStreak > 0 ? curStreak+' '+streakLabel : '—'}</div></div>
+      <div class="mc"><div class="mc-l">Max Win Streak</div><div class="mc-v pos">${maxW}</div><div class="mc-s">consecutivi Win</div></div>
+      <div class="mc"><div class="mc-l">Max Loss Streak</div><div class="mc-v neg">${maxL}</div><div class="mc-s">consecutivi Loss</div></div>
+      <div class="mc"><div class="mc-l">Streak corrente</div><div class="mc-v ${streakCls}">${curStreak>0?curStreak+' '+streakLabel:'—'}</div></div>
     </div>
   `;
 
-  // Risk of Ruin
-  const rorColor = ror===null?'':'color:'+(ror<5?'var(--gr)':ror<20?'var(--am)':'var(--re)');
-  const rorLabel = ror===null?'—':ror<1?'< 1%':ror.toFixed(1)+'%';
-  const rorComment = ror===null?'Dati insufficienti':
-    ror<5?'✓ Rischio molto basso — sistema solido':
-    ror<20?'⚠ Rischio moderato — monitora i parametri':
-    '🔴 Rischio elevato — riduci il risk per trade';
-  document.getElementById('risk-ruin').innerHTML = `
-    <div style="text-align:center;padding:16px 0;">
-      <div style="font-size:42px;font-weight:700;${rorColor}">${rorLabel}</div>
-      <div style="font-size:12px;color:var(--tx3);margin-top:4px;">probabilità di perdere ${ruinThreshold}R di equity</div>
-      <div style="font-size:13px;margin-top:10px;color:var(--tx2);">${rorComment}</div>
-    </div>
-    <div style="font-size:11px;color:var(--tx3);border-top:.5px solid var(--b1);padding-top:8px;margin-top:4px;">
-      Calcolato su ${ruinThreshold}R di soglia rovina · accuracy ${(acc*100).toFixed(1)}% · rapporto W/L ${avgL>0?(avgW/avgL).toFixed(2):'—'}
-    </div>
-  `;
+  // Prop Firm Calculator (usa tutti i trade chiusi per la soglia)
+  calcPropRisk(maxDD, maxL, allClosed);
 
-  // Kelly
-  const kellyDisplay = kelly===null?'—':kelly<=0?'0% (sistema non profittevole)':kelly.toFixed(1)+'%';
-  const halfKellyDisplay = halfKelly===null?'—':halfKelly<=0?'0%':halfKelly.toFixed(1)+'%';
-  const kellyComment = kelly===null||kelly<=0
-    ? 'Il sistema non è ancora profittevole abbastanza per il Kelly.'
-    : kelly>25
-    ? `Kelly pieno (${kelly.toFixed(1)}%) è aggressivo. <strong>Half-Kelly (${halfKellyDisplay})</strong> è consigliato in pratica.`
-    : `Half-Kelly consigliato: <strong>${halfKellyDisplay}</strong> del capitale per trade.`;
-  document.getElementById('risk-kelly').innerHTML = `
-    <div style="text-align:center;padding:16px 0;">
-      <div style="font-size:32px;font-weight:700;color:var(--pu)">${halfKellyDisplay}</div>
-      <div style="font-size:12px;color:var(--tx3);margin-top:4px;">Half-Kelly consigliato per trade</div>
-      <div style="font-size:11px;color:var(--tx3);">Kelly pieno: ${kellyDisplay}</div>
-    </div>
-    <div style="font-size:12px;color:var(--tx2);border-top:.5px solid var(--b1);padding-top:8px;margin-top:4px;">${kellyComment}</div>
-  `;
-
-  // Equity chart + drawdown info
+  // Equity chart
   if(CH.equity){try{CH.equity.destroy();}catch(e){}}
   const cc = chartColors();
   const ddArr = [];
@@ -2085,13 +2059,10 @@ function _renderRisk() {
     const el=document.getElementById('c-equity');
     if(el) CH.equity = new Chart(el, {
       type:'line',
-      data:{
-        labels:eq.map((_,i)=>i),
-        datasets:[
-          {label:'Equity (R)',data:eq,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.3,pointRadius:eq.length<50?2:0,borderWidth:2},
-          {label:'Drawdown (R)',data:ddArr.map(v=>-v),borderColor:cc.red,backgroundColor:'transparent',fill:false,tension:.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}
-        ]
-      },
+      data:{labels:eq.map((_,i)=>i),datasets:[
+        {label:'Equity (R)',data:eq,borderColor:cc.line,backgroundColor:cc.fill,fill:true,tension:.3,pointRadius:eq.length<50?2:0,borderWidth:2},
+        {label:'Drawdown (R)',data:ddArr.map(v=>-v),borderColor:cc.red,backgroundColor:'transparent',fill:false,tension:.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}
+      ]},
       options:{responsive:true,maintainAspectRatio:false,
         plugins:{legend:{display:true,labels:{font:{size:10}}},tooltip:{mode:'index',intersect:false}},
         scales:{y:{grid:{color:cc.grid},ticks:{callback:v=>v+'R'}},x:{display:false}}}
@@ -2104,35 +2075,96 @@ function _renderRisk() {
       <div class="mc"><div class="mc-l">Trade per recupero</div><div class="mc-v">${exp>0?Math.ceil(maxDD/exp)+'≈':'—'}</div><div class="mc-s">stima a expectancy costante</div></div>
     </div>
   `;
-
-  // Glossario
   document.getElementById('risk-glossary').innerHTML = `
     <div style="display:grid;gap:14px;">
-      <div><strong>Accuracy</strong> = Win / (Win + Loss)<br>
-      <span style="font-size:12px;">La percentuale di trade chiusi in profitto. Con il tuo sistema attuale: <strong>${(acc*100).toFixed(1)}%</strong>. Non basta da sola: un sistema al 30% può essere comunque profittevole se l'avg win è molto superiore all'avg loss.</span></div>
-
-      <div><strong>Expectancy</strong> = (Accuracy × Avg Win) − ((1 − Accuracy) × Avg Loss)<br>
-      <span style="font-size:12px;">Quanto guadagni in R per ogni trade, in media. Con i tuoi dati: <strong>${exp>0?'+':''}${exp.toFixed(3)}R per trade</strong>. Se positiva, il sistema è matematicamente profittevole nel lungo periodo. Moltiplicala per il numero di trade previsti per stimare il P&L atteso.</span></div>
-
-      <div><strong>Rapporto W/L (Win/Loss ratio)</strong> = Avg Win / Avg Loss<br>
-      <span style="font-size:12px;">Confronta la dimensione media dei tuoi trade vincenti con quelli perdenti. Il tuo: <strong>${avgL>0?(avgW/avgL).toFixed(2):'—'}</strong>. Combinato con l'accuracy determina l'expectancy.</span></div>
-
-      <div><strong>Max Drawdown</strong><br>
-      <span style="font-size:12px;">La perdita massima cumulativa in R dalla curva equity, misurata dal picco massimo al minimo successivo. Misura quanto puoi "scendere" prima di risalire. Il tuo: <strong>-${maxDD.toFixed(2)}R</strong>.</span></div>
-
-      <div><strong>Risk of Ruin</strong><br>
-      <span style="font-size:12px;">La probabilità che tu perda una soglia critica di equity (${ruinThreshold}R) prima di recuperare. Calcolato con la formula di Ralph Vince basata su accuracy e rapporto W/L. Sotto il 5% è considerato accettabile per sistemi professionali.</span></div>
-
-      <div><strong>Kelly Criterion</strong> = (p × b − q) / b<br>
-      <span style="font-size:12px;">Dove p = accuracy, q = 1−p, b = rapporto W/L. Ti dice la % ottimale del capitale da rischiare per massimizzare la crescita geometrica. In pratica si usa il <strong>Half-Kelly</strong> (metà del valore) per ridurre la volatilità del capitale rimanendo comunque vicini all'ottimo teorico.</span></div>
-
-      <div><strong>Winning/Losing Streak</strong><br>
-      <span style="font-size:12px;">Il numero massimo di trade consecutivi in win o in loss. Utile per dimensionare il capitale: se il tuo max losing streak è ${maxL}, significa che potresti perdere ${(maxL * safeNum(0.5)||0).toFixed(1)}% del capitale con un rischio del 0.5% per trade in sequenza sfavorevole.</span></div>
-
-      <div><strong>Trade per recupero dal drawdown</strong><br>
-      <span style="font-size:12px;">Stima di quanti trade servono per recuperare il max drawdown, assumendo l'expectancy attuale costante: max drawdown / expectancy ≈ <strong>${exp>0?Math.ceil(maxDD/exp):'—'} trade</strong>.</span></div>
+      <div><strong>Accuracy</strong> = Win / (Win + Loss)<br><span style="font-size:12px;">Con i tuoi dati: <strong>${(acc*100).toFixed(1)}%</strong>.</span></div>
+      <div><strong>Expectancy</strong> = (Accuracy × Avg Win) − (1−Accuracy) × Avg Loss<br><span style="font-size:12px;">Con i tuoi dati: <strong>${exp>0?'+':''}${exp.toFixed(3)}R/trade</strong>.</span></div>
+      <div><strong>Max Drawdown</strong><br><span style="font-size:12px;">Perdita massima cumulativa dalla curva equity. Il tuo: <strong>-${maxDD.toFixed(2)}R</strong>.</span></div>
+      <div><strong>Prop Firm Risk Calculator</strong><br><span style="font-size:12px;">Formula: Max DD Prop (%) / (Drawdown di riferimento × Moltiplicatore). Con meno di 30 trade usa -15R fisso per proteggerti nelle fasi iniziali del conto.</span></div>
     </div>
   `;
+}
+
+
+// ─────────────────────────────────────────────
+// PROP FIRM RISK CALCULATOR
+// ─────────────────────────────────────────────
+const MIN_TRADES_THRESHOLD = 30;
+const WARMUP_DD_FALLBACK   = 15; // R conservativo in fase di riscaldamento
+
+function calcPropRisk(maxDD, maxL, totalTrades) {
+  const propDD   = parseFloat(document.getElementById('prop-dd')?.value)   || 10;
+  const mult     = parseFloat(document.getElementById('prop-mult')?.value)  || 1.5;
+  const capital  = parseFloat(document.getElementById('prop-cap')?.value)   || 0;
+  const currency = document.getElementById('prop-currency')?.value || '€';
+
+  const elPct   = document.getElementById('prop-result-pct');
+  const elAbs   = document.getElementById('prop-result-abs');
+  const elBadge = document.getElementById('prop-result-badge');
+  const elWarn  = document.getElementById('prop-sample-warn');
+  if(!elPct) return;
+
+  // ── Scegli il drawdown di riferimento ──────────────
+  let ddRef, mode;
+
+  if(totalTrades < MIN_TRADES_THRESHOLD) {
+    // CASO A — Fase di riscaldamento: usa scenario fisso conservativo
+    ddRef = WARMUP_DD_FALLBACK;
+    mode  = 'warmup';
+  } else {
+    // CASO B — Dati sufficienti: usa storico reale
+    if(maxDD > 0) {
+      ddRef = maxDD;
+    } else if(maxL > 0) {
+      ddRef = maxL;        // fallback su max loss streak
+    } else {
+      ddRef = WARMUP_DD_FALLBACK;
+    }
+    mode = 'live';
+  }
+
+  // ── Formula ─────────────────────────────────────────
+  // rischio% = Max DD Prop% / (ddRef × moltiplicatore)
+  const riskPct = propDD / (ddRef * mult);
+  const riskFmt = riskPct.toFixed(2) + '%';
+
+  // ── Colore risultato ─────────────────────────────────
+  let color, label;
+  if(riskPct < 0.5) {
+    color = 'var(--am)'; label = '⚠ Molto conservativo';
+  } else if(riskPct <= 1.0) {
+    color = 'var(--gr)'; label = '✓ Rischio ragionevole';
+  } else if(riskPct <= 2.0) {
+    color = 'var(--am)'; label = '⚠ Rischio elevato';
+  } else {
+    color = 'var(--re)'; label = '🔴 Rischio pericoloso';
+  }
+
+  elPct.textContent  = riskFmt;
+  elPct.style.color  = color;
+
+  // ── Importo assoluto ─────────────────────────────────
+  if(capital > 0) {
+    const absRisk = (capital * riskPct / 100).toFixed(0);
+    elAbs.textContent = currency + absRisk + ' per 1R';
+    elAbs.style.color = color;
+  } else {
+    elAbs.textContent = '';
+  }
+
+  // ── Badge ────────────────────────────────────────────
+  elBadge.textContent = label;
+  elBadge.style.background = color === 'var(--gr)' ? 'var(--gr-l)' :
+                              color === 'var(--re)' ? 'var(--re-l)' : 'var(--am-l)';
+  elBadge.style.color = color;
+
+  // ── Messaggio contestuale ────────────────────────────
+  if(mode === 'warmup') {
+    elWarn.innerHTML = `⚠️ <em>Campione ridotto (${totalTrades}/${MIN_TRADES_THRESHOLD} trade). Calcolo basato su scenario di stress test conservativo di -${WARMUP_DD_FALLBACK}R.</em>`;
+  } else {
+    const ddSource = maxDD > 0 ? 'Max Drawdown storico reale' : (maxL > 0 ? 'Max Loss Streak' : 'scenario conservativo');
+    elWarn.innerHTML = `✅ <em>Dati rilevanti (${totalTrades} trade). Calcolo basato su ${ddSource}: ${ddRef.toFixed(1)}R × ${mult}× = ${(ddRef*mult).toFixed(1)}R stress test.</em>`;
+  }
 }
 
 function exportCSV(){
