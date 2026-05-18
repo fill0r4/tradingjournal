@@ -922,7 +922,8 @@ const RULES = [
 
   // ── GESTIONE ──────────────────────────────
   { id:'r_rr1',         text:'C1 chiuso a RR1 (≥ 0.95R)',                        cat:'Gestione',  auto:true,   tags:['always'] },
-  { id:'r_1trade',      text:'Limite 1 trade al giorno rispettato',               cat:'Gestione',  auto:true,   tags:['always'] },
+  { id:'r_concurrent',  text:'Nessun trade aperto senza C1 già incassato sul precedente', cat:'Gestione', auto:true, tags:['always'] },
+  { id:'r_after_loss',  text:'Nessun trade dopo una Loss in giornata',                    cat:'Gestione', auto:true, tags:['always'] },
 ];
 
 function getActiveTags(dir, setup, trig) {
@@ -1023,18 +1024,46 @@ function onFormChange() {
   buildRules(dir, setup, trig, violatedIds);
   recalcAll();
 
-  // Auto-check regola 1 trade al giorno
+  // Auto-check regole di gestione sessione
   const entryDate = (document.getElementById('f-et').value||'').slice(0,10);
+  const entryTime = document.getElementById('f-et').value||'';
   if(entryDate) {
-    const sameDay = trades.filter(t =>
+
+    // Regola 1: nessun trade aperto senza C1 già incassato
+    // Cerca trade con entryTime < questo trade, risultato "Aperto" oppure exit1R vuoto/<=0
+    const openWithoutC1 = trades.filter(t => {
+      if(t.id === editingId) return false;
+      if(t.result !== 'Aperto' && t.result !== '') {
+        // trade chiuso — ha C1?
+        const r1 = safeNum(t.exit1R);
+        if(r1 !== '' && r1 > 0) return false; // C1 incassato, ok
+      }
+      // trade aperto o senza C1: controlla se era aperto al momento dell'entrata
+      const tTime = t.entryTime || '';
+      if(entryTime && tTime && tTime < entryTime) {
+        const r1 = safeNum(t.exit1R);
+        return r1 === '' || r1 <= 0; // aperto senza C1
+      }
+      return false;
+    });
+    const cbConc = document.getElementById('rule_r_concurrent');
+    if(cbConc) {
+      const ok = openWithoutC1.length === 0;
+      cbConc.checked = ok;
+      cbConc.closest('.rrow').classList.toggle('auto-viol', !ok);
+    }
+
+    // Regola 2: nessun trade dopo una Loss in giornata
+    const lossToday = trades.filter(t =>
       t.id !== editingId &&
+      t.result === 'Loss' &&
       (t.entryTime||'').slice(0,10) === entryDate
     );
-    const cb1t = document.getElementById('rule_r_1trade');
-    if(cb1t) {
-      const ok = sameDay.length === 0;
-      cb1t.checked = ok;
-      cb1t.closest('.rrow').classList.toggle('auto-viol', !ok);
+    const cbLoss = document.getElementById('rule_r_after_loss');
+    if(cbLoss) {
+      const ok = lossToday.length === 0;
+      cbLoss.checked = ok;
+      cbLoss.closest('.rrow').classList.toggle('auto-viol', !ok);
     }
   }
 }
