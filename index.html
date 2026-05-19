@@ -535,9 +535,19 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
           <div class="scen-chips">
             <button type="button" class="chip" id="chip-discount" onclick="setRangeType('sotto05')">Sotto 0.5 — bias Long</button>
             <button type="button" class="chip" id="chip-premium"  onclick="setRangeType('sopra05')">Sopra 0.5 — bias Short</button>
+            <button type="button" class="chip" id="chip-tocco05"  onclick="setRangeType('tocco05')">Tocco 0.5</button>
+          </div>
+        </div>
+        <!-- Step 5: direzione tocco 0.5 -->
+        <div class="scen-step" id="step-tocco-dir" style="display:none;">
+          <div class="scen-step-label">Arriva da sopra o da sotto?</div>
+          <div class="scen-chips">
+            <button type="button" class="chip" id="chip-tocco-da-sopra" onclick="setToccoDir('da_sopra')">Da sopra → bias Long</button>
+            <button type="button" class="chip" id="chip-tocco-da-sotto" onclick="setToccoDir('da_sotto')">Da sotto → bias Short</button>
           </div>
         </div>
         <input type="hidden" id="f-range-type" value="">
+        <input type="hidden" id="f-tocco-dir" value="">
 
         <!-- Scenario alert -->
         <div class="alert-box alert-err" id="scen-alert"></div>
@@ -741,14 +751,14 @@ input[readonly]{background:var(--surf2);color:var(--tx2);}
 // mediana: 'sopra' | 'sotto' | null (solo se pfAvail)
 // rangePos: 'sotto05' | 'sopra05' | null (solo se range)
 // ─────────────────────────────────────────────
-let scenState = { trend:null, pfAvail:null, mediana:null, rangePos:null };
+let scenState = { trend:null, pfAvail:null, mediana:null, rangePos:null, toccoDir:null };
 
 function resetScen() {
-  scenState = { trend:null, pfAvail:null, mediana:null, rangePos:null };
-  ['f-trend','f-pf-avail','f-mediana','f-range-type']
+  scenState = { trend:null, pfAvail:null, mediana:null, rangePos:null, toccoDir:null };
+  ['f-trend','f-pf-avail','f-mediana','f-range-type','f-tocco-dir']
     .forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
   document.querySelectorAll('.chip').forEach(c => c.className='chip');
-  ['step-pf','step-mediana','step-range-type'].forEach(id=>{
+  ['step-pf','step-mediana','step-range-type','step-tocco-dir'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.style.display='none';
   });
   hideAlerts();
@@ -791,9 +801,24 @@ function setMediana(v) {
 
 function setRangeType(v) {
   scenState.rangePos = v;
+  scenState.toccoDir = null;
   document.getElementById('f-range-type').value = v;
+  document.getElementById('f-tocco-dir').value = '';
   document.getElementById('chip-discount').className='chip'+(v==='sotto05'?' sel':'');
   document.getElementById('chip-premium').className='chip'+(v==='sopra05'?' sel':'');
+  document.getElementById('chip-tocco05').className='chip'+(v==='tocco05'?' sel':'');
+  // Mostra sub-step solo per tocco 0.5
+  document.getElementById('step-tocco-dir').style.display = v==='tocco05' ? '' : 'none';
+  document.getElementById('chip-tocco-da-sopra').className='chip';
+  document.getElementById('chip-tocco-da-sotto').className='chip';
+  hideAlerts(); onFormChange();
+}
+
+function setToccoDir(v) {
+  scenState.toccoDir = v;
+  document.getElementById('f-tocco-dir').value = v;
+  document.getElementById('chip-tocco-da-sopra').className='chip'+(v==='da_sopra'?' sel':'');
+  document.getElementById('chip-tocco-da-sotto').className='chip'+(v==='da_sotto'?' sel':'');
   hideAlerts(); onFormChange();
 }
 
@@ -825,7 +850,13 @@ function scenarioLabel() {
   if (!s.trend) return '';
   if (s.trend === 'range') {
     if (!s.rangePos) return '↔️ Range';
-    return s.rangePos === 'sotto05' ? '↔️ Range — sotto 0.5 (bias Long)' : '↔️ Range — sopra 0.5 (bias Short)';
+    if (s.rangePos === 'sotto05') return '↔️ Range — sotto 0.5 (bias Long)';
+    if (s.rangePos === 'sopra05') return '↔️ Range — sopra 0.5 (bias Short)';
+    if (s.rangePos === 'tocco05') {
+      if (s.toccoDir === 'da_sopra') return '↔️ Range — tocco 0.5 da sopra (bias Long)';
+      if (s.toccoDir === 'da_sotto') return '↔️ Range — tocco 0.5 da sotto (bias Short)';
+      return '↔️ Range — tocco 0.5';
+    }
   }
   const emoji = s.trend==='rialzista' ? '📈' : '📉';
   const label = s.trend==='rialzista' ? 'Trend rialzista' : 'Trend ribassista';
@@ -860,6 +891,10 @@ function validateAll(dir, setup, trig) {
   } else if (isRange) {
     if (s.rangePos === 'sotto05' && isShort) { alertLines.push('Sotto 0.5 il bias è Long: Short non ammesso'); dirViol=true; }
     if (s.rangePos === 'sopra05' && isLong)  { alertLines.push('Sopra 0.5 il bias è Short: Long non ammesso'); dirViol=true; }
+    if (s.rangePos === 'tocco05') {
+      if (s.toccoDir === 'da_sopra' && isShort) { alertLines.push('Tocco 0.5 da sopra: bias Long, Short non ammesso'); dirViol=true; }
+      if (s.toccoDir === 'da_sotto' && isLong)  { alertLines.push('Tocco 0.5 da sotto: bias Short, Long non ammesso'); dirViol=true; }
+    }
   }
   if (dirViol) violatedIds.push('r_dir');
 
@@ -1030,21 +1065,15 @@ function onFormChange() {
   if(entryDate) {
 
     // Regola 1: nessun trade aperto senza C1 già incassato
-    // Cerca trade con entryTime < questo trade, risultato "Aperto" oppure exit1R vuoto/<=0
+    // Una Loss chiude il trade (rischio azzerato) — non conta come "aperto senza C1"
     const openWithoutC1 = trades.filter(t => {
       if(t.id === editingId) return false;
-      if(t.result !== 'Aperto' && t.result !== '') {
-        // trade chiuso — ha C1?
-        const r1 = safeNum(t.exit1R);
-        if(r1 !== '' && r1 > 0) return false; // C1 incassato, ok
-      }
-      // trade aperto o senza C1: controlla se era aperto al momento dell'entrata
+      if(t.result === 'Loss') return false; // loss = trade chiuso, rischio zero
       const tTime = t.entryTime || '';
-      if(entryTime && tTime && tTime < entryTime) {
-        const r1 = safeNum(t.exit1R);
-        return r1 === '' || r1 <= 0; // aperto senza C1
-      }
-      return false;
+      if(!entryTime || !tTime || tTime >= entryTime) return false;
+      // trade aperto o Win/BE senza C1 ancora incassato
+      const r1 = safeNum(t.exit1R);
+      return r1 === '' || r1 <= 0;
     });
     const cbConc = document.getElementById('rule_r_concurrent');
     if(cbConc) {
@@ -1535,6 +1564,7 @@ async function saveTrade(e){
     pfAvail:scenState.pfAvail,
     mediana:scenState.mediana||'',
     rangePos:scenState.rangePos||'',
+    toccoDir:scenState.toccoDir||'',
     setups:getSelectedSetups(),
     setup:getSelectedSetups()[0]||'', // compatibilità retroattiva
     trigger:trig,
@@ -1726,6 +1756,16 @@ function loadForm(id){
         document.getElementById('f-range-type').value=t.rangePos;
         document.getElementById('chip-discount').className='chip'+(t.rangePos==='sotto05'?' sel':'');
         document.getElementById('chip-premium').className='chip'+(t.rangePos==='sopra05'?' sel':'');
+        document.getElementById('chip-tocco05').className='chip'+(t.rangePos==='tocco05'?' sel':'');
+        if(t.rangePos==='tocco05'){
+          document.getElementById('step-tocco-dir').style.display='';
+          if(t.toccoDir){
+            scenState.toccoDir=t.toccoDir;
+            document.getElementById('f-tocco-dir').value=t.toccoDir;
+            document.getElementById('chip-tocco-da-sopra').className='chip'+(t.toccoDir==='da_sopra'?' sel':'');
+            document.getElementById('chip-tocco-da-sotto').className='chip'+(t.toccoDir==='da_sotto'?' sel':'');
+          }
+        }
       }
     }
   }
